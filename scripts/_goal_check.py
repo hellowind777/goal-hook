@@ -25,7 +25,7 @@ import sys
 import time
 
 STATUS_FILE = "scripts/data/.goal_status.json"
-STALE_HOURS = 48  # in_progress 文件超过此时间未更新 → 判定为崩溃残留
+STALE_HOURS = 168  # 7 天未更新 → 判定崩溃。GOAL_PROMPT 每轮重写，活跃任务不会触发
 
 HOW_TO_TERMINATE = (
     "Goal 循环保护中。当你确认目标已达成，执行: "
