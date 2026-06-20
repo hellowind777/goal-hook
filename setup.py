@@ -2,7 +2,8 @@
 """goal-hook 一键安装 —— 复制到 CC 插件目录 + 注册 marketplace。"""
 import json, os, shutil, sys
 
-PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+PLUGIN_SRC = os.path.join(REPO_ROOT, "plugins", "goal-hook")
 CC_PLUGINS = os.path.join(os.path.expanduser("~"), ".claude", "plugins")
 MKT_DIR = os.path.join(CC_PLUGINS, "local-marketplaces", "goal-hook-marketplace")
 PLUGIN_DEST = os.path.join(MKT_DIR, "plugins", "goal-hook")
@@ -23,13 +24,13 @@ if os.path.exists(PLUGIN_DEST):
         os.system(f'cmd /c "rmdir /s /q {PLUGIN_DEST}" 2>nul')
         if os.path.exists(PLUGIN_DEST):
             shutil.rmtree(PLUGIN_DEST, ignore_errors=True)
-shutil.copytree(PLUGIN_DIR, PLUGIN_DEST,
+shutil.copytree(PLUGIN_SRC, PLUGIN_DEST,
                 ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc", ".gitignore"))
 
 # Step 2: Write marketplace.json with correct relative path for CC plugins directory
 # (repo has source:"." for standalone use; CC plugins dir needs source:"./plugins/goal-hook")
 os.makedirs(os.path.join(MKT_DIR, ".claude-plugin"), exist_ok=True)
-with open(os.path.join(PLUGIN_DIR, ".claude-plugin", "marketplace.json"), "r", encoding="utf-8") as f:
+with open(os.path.join(REPO_ROOT, ".claude-plugin", "marketplace.json"), "r", encoding="utf-8") as f:
     mkt = json.load(f)
 for p in mkt["plugins"]:
     p["source"] = "./plugins/goal-hook"
