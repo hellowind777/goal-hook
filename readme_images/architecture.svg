@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 400" font-family="system-ui, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#555"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="320" y="30" text-anchor="middle" font-size="16" font-weight="bold" fill="#333">goal-hook Architecture</text>
+
+  <!-- Stop Event -->
+  <rect x="240" y="50" width="160" height="36" rx="6" fill="#4a90d9" stroke="#357abd" stroke-width="1.5"/>
+  <text x="320" y="73" text-anchor="middle" font-size="13" fill="#fff" font-weight="bold">Stop Event Triggered</text>
+  <line x1="320" y1="86" x2="320" y2="110" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Check File -->
+  <rect x="240" y="112" width="160" height="36" rx="6" fill="#f5f5f5" stroke="#999" stroke-width="1.5"/>
+  <text x="320" y="135" text-anchor="middle" font-size="12" fill="#333">Check .goal_status.json</text>
+
+  <!-- Three branches -->
+  <line x1="320" y1="148" x2="320" y2="170" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Branch labels -->
+  <!-- Left: No file -->
+  <rect x="40" y="180" width="160" height="60" rx="6" fill="#e8f5e9" stroke="#4caf50" stroke-width="1.5"/>
+  <text x="120" y="205" text-anchor="middle" font-size="12" font-weight="bold" fill="#2e7d32">No File</text>
+  <text x="120" y="225" text-anchor="middle" font-size="11" fill="#555">Pass — not a /goal session</text>
+
+  <!-- Center: in_progress -->
+  <rect x="240" y="180" width="160" height="60" rx="6" fill="#fff3e0" stroke="#ff9800" stroke-width="1.5"/>
+  <text x="320" y="205" text-anchor="middle" font-size="12" font-weight="bold" fill="#e65100">in_progress</text>
+  <text x="320" y="225" text-anchor="middle" font-size="11" fill="#555">Block — keep running</text>
+
+  <!-- Right: terminated -->
+  <rect x="440" y="180" width="160" height="60" rx="6" fill="#e8f5e9" stroke="#4caf50" stroke-width="1.5"/>
+  <text x="520" y="205" text-anchor="middle" font-size="12" font-weight="bold" fill="#2e7d32">terminated</text>
+  <text x="520" y="225" text-anchor="middle" font-size="11" fill="#555">Pass + Cleanup</text>
+
+  <!-- Arrows from center to branches -->
+  <line x1="320" y1="175" x2="120" y2="180" stroke="#999" stroke-width="1" stroke-dasharray="4,3"/>
+  <line x1="320" y1="175" x2="520" y2="180" stroke="#999" stroke-width="1" stroke-dasharray="4,3"/>
+
+  <!-- Bottom: timeout note -->
+  <rect x="180" y="270" width="280" height="36" rx="6" fill="#fce4ec" stroke="#e91e63" stroke-width="1"/>
+  <text x="320" y="293" text-anchor="middle" font-size="11" fill="#c62828">Stale in_progress (&gt;168h) → auto-expire → Pass</text>
+
+  <!-- Footer -->
+  <text x="40" y="340" font-size="11" fill="#888">Status file: scripts/data/.goal_status.json</text>
+  <text x="40" y="360" font-size="11" fill="#888">CC built-in hook failure → non-blocking error → our hook still runs</text>
+  <text x="40" y="380" font-size="11" fill="#888">Non-/goal sessions: no file → zero interference</text>
+</svg>
