@@ -1,48 +1,43 @@
 # goal-hook v1.0.3 安装脚本 (PowerShell)
-$ErrorActionPreference = "Stop"
-Write-Host "=== goal-hook v1.0.3 安装 ===" -ForegroundColor Cyan
+$ErrorActionPreference = "Continue"
+Write-Host "=== goal-hook v1.0.3 ===" -ForegroundColor Cyan
 
 $pluginDir = $PSScriptRoot
 $settingsPath = "$env:USERPROFILE\.claude\settings.json"
 
 if (-not (Test-Path $settingsPath)) {
-    Write-Host "❌ 未找到 $settingsPath，请先运行一次 Claude Code" -ForegroundColor Red
+    Write-Host "ERROR: $settingsPath not found. Run Claude Code first." -ForegroundColor Red
     exit 1
 }
 
-Write-Host "[1/2] 注册 marketplace ..."
-try {
-    $settings = Get-Content $settingsPath -Encoding UTF8 | ConvertFrom-Json -Depth 10 -AsHashtable
+Write-Host "[1/3] Backing up settings.json ..."
+Copy-Item $settingsPath "$settingsPath.bak"
 
-    if (-not $settings["extraKnownMarketplaces"]) {
-        $settings["extraKnownMarketplaces"] = @{}
-    }
-    $settings["extraKnownMarketplaces"]["goal-hook-marketplace"] = @{
-        source = @{
-            path = $pluginDir
-            source = "directory"
-        }
-    }
+Write-Host "[2/3] Registering marketplace and enabling plugin ..."
+$settings = Get-Content $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
 
-    if (-not $settings["enabledPlugins"]) {
-        $settings["enabledPlugins"] = @{}
+$marketplace = @{
+    source = @{
+        path = $pluginDir
+        source = "directory"
     }
-    $settings["enabledPlugins"]["goal-hook@goal-hook-marketplace"] = $true
-
-    $settings | ConvertTo-Json -Depth 10 | Set-Content $settingsPath -Encoding UTF8
-    Write-Host "  ✅ settings.json 已更新" -ForegroundColor Green
-} catch {
-    Write-Host "  ❌ 更新失败: $_" -ForegroundColor Red
-    Write-Host "  请手动编辑 $settingsPath"
-    exit 1
 }
+$settings.extraKnownMarketplaces | Add-Member -Name "goal-hook-marketplace" -Value $marketplace -MemberType NoteProperty -Force
+$settings.enabledPlugins | Add-Member -Name "goal-hook@goal-hook-marketplace" -Value $true -MemberType NoteProperty -Force
 
-Write-Host "[2/2] 验证插件文件 ..."
+$settings | ConvertTo-Json -Depth 10 | Set-Content $settingsPath -Encoding UTF8
+Write-Host "  settings.json updated" -ForegroundColor Green
+
+Write-Host "[3/3] Verifying plugin files ..."
+$ok = $true
 @("hooks\hooks.json", "scripts\_goal_check.py", ".claude-plugin\plugin.json") | ForEach-Object {
     $f = Join-Path $pluginDir $_
-    if (Test-Path $f) { Write-Host "  ✅ $_" -ForegroundColor Green }
-    else { Write-Host "  ❌ $_ 缺失" -ForegroundColor Red }
+    if (Test-Path $f) { Write-Host "  OK  $_" -ForegroundColor Green }
+    else { Write-Host "  MISS  $_" -ForegroundColor Red; $ok = $false }
 }
 
-Write-Host "`n=== 安装完成 ===" -ForegroundColor Cyan
-Write-Host "请重启 Claude Code 使插件生效。"
+if ($ok) {
+    Write-Host "`nDone. Restart Claude Code." -ForegroundColor Cyan
+} else {
+    Write-Host "`nSome files missing. Check the plugin directory." -ForegroundColor Red
+}

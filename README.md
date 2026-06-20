@@ -26,16 +26,10 @@ If a `/goal` session crashes before writing `terminated`, the stale `in_progress
 
 ## Installation
 
-**Quick Install (Windows)**
+**Quick Install**
 
-```powershell
-.\setup.ps1
-```
-
-Or:
-
-```cmd
-setup.bat
+```bash
+python setup.py
 ```
 
 Restart Claude Code. Done.
