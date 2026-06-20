@@ -7,14 +7,15 @@
   status = "terminated"       → pass（目标达成）+ 自动清理文件
 
 超时保护：
-  in_progress 文件超过 48 小时未更新 → 判定为崩溃残留，自动清理并放行
-  防止 /goal 会话中途崩溃后，残留文件导致后续非 /goal 会话无法退出。
+  in_progress 文件超过 8 小时未更新 → 判定为会话残留，自动清理并放行。
+  GOAL_PROMPT 每轮重写文件（mtime 总是在几分钟内），超过 8 小时没碰过
+  说明 /goal 会话早已结束，只是文件没被正常清理。也覆盖中途崩溃场景。
 
 设计原则：
   - 零依赖：不读 transcript，不检测 /goal 标记，不依赖 CC 内置 hook
   - 持久化兜底：上下文压缩不影响磁盘上的状态文件
   - 非 /goal 会话：无文件 → pass，完全不影响正常使用
-  - 崩溃恢复：48 小时超时自动过期，不留僵尸文件
+  - 残留清理：8 小时超时自动过期，不留僵尸文件阻塞后续正常退出
 
 用法：
   python ${CLAUDE_PLUGIN_ROOT}/scripts/_goal_check.py
@@ -25,7 +26,7 @@ import sys
 import time
 
 STATUS_FILE = "scripts/data/.goal_status.json"
-STALE_HOURS = 168  # 7 天未更新 → 判定崩溃。GOAL_PROMPT 每轮重写，活跃任务不会触发
+STALE_HOURS = 8  # GOAL_PROMPT 每轮重写，mtime 活跃时总是几分钟内。超 8h 必是残留
 
 HOW_TO_TERMINATE = (
     "Goal 循环保护中。当你确认目标已达成，执行: "
