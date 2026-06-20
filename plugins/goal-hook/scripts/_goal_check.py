@@ -65,6 +65,13 @@ def _file_age_hours() -> float:
 
 
 def main() -> None:
+    # Windows 控制台默认 GBK 编码无法输出 ✅ 等 emoji，强制 UTF-8
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     status_data = _read_status()
 
     # 无文件 → 放行
