@@ -26,7 +26,21 @@ If a `/goal` session crashes before writing `terminated`, the stale `in_progress
 
 ## Installation
 
-**Method 1: Local Marketplace (recommended)**
+**Quick Install (Windows)**
+
+```powershell
+.\setup.ps1
+```
+
+Or:
+
+```cmd
+setup.bat
+```
+
+Restart Claude Code. Done.
+
+**Manual Install**
 
 ```bash
 git clone https://github.com/hellowind777/goal-hook.git /path/to/goal-hook
@@ -50,7 +64,7 @@ Add to `~/.claude/settings.json`:
 }
 ```
 
-**Method 2: Manual Copy**
+**Alternative: Manual Copy**
 
 Copy the plugin directory to `~/.claude/plugins/goal-hook/`, then enable:
 
