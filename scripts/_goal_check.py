@@ -34,8 +34,15 @@ HOW_TO_TERMINATE = (
 )
 
 
-def _emit(decision: str, reason: str) -> None:
-    print(json.dumps({"decision": decision, "reason": reason}, ensure_ascii=False))
+def _block(reason: str) -> None:
+    """阻止停止。CC 只接受 decision: \"block\"。"""
+    print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
+    sys.exit(0)
+
+
+def _pass() -> None:
+    """放行。CC 要求空输出或不含 decision 字段。"""
+    print("{}")
     sys.exit(0)
 
 
@@ -62,31 +69,30 @@ def main() -> None:
 
     # 无文件 → 放行
     if status_data is None:
-        _emit("pass", "")
+        _pass()
 
     status = status_data.get("status", "")
 
     if status == "in_progress":
         age = _file_age_hours()
         if age > STALE_HOURS:
-            # 崩溃残留 → 自动清理
             try:
                 os.remove(STATUS_FILE)
             except OSError:
                 pass
-            _emit("pass", "")
+            _pass()
         reason = status_data.get("reason", "GOAL_PROMPT 循环执行中")
-        _emit("block", f"[goal-hook] {reason}。" + HOW_TO_TERMINATE)
+        _block(f"[goal-hook] {reason}。" + HOW_TO_TERMINATE)
 
     if status == "terminated":
         try:
             os.remove(STATUS_FILE)
         except OSError:
             pass
-        _emit("pass", "")
+        _pass()
 
     # 未知状态 → 保守放行
-    _emit("pass", "")
+    _pass()
 
 
 if __name__ == "__main__":
