@@ -29,7 +29,7 @@ If a `/goal` session crashes before writing `terminated`, the stale `in_progress
 **Method 1: Local Marketplace (recommended)**
 
 ```bash
-git clone https://github.com/hellowind777/goal-hook.git D:/GitHub/dev/plugin/goal-hook
+git clone https://github.com/hellowind777/goal-hook.git /path/to/goal-hook
 ```
 
 Add to `~/.claude/settings.json`:
@@ -42,7 +42,7 @@ Add to `~/.claude/settings.json`:
   "extraKnownMarketplaces": {
     "goal-hook-marketplace": {
       "source": {
-        "path": "D:\\GitHub\\dev\\plugin\\goal-hook",
+        "path": "/path/to/goal-hook",
         "source": "directory"
       }
     }
