@@ -5,8 +5,30 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python ${CLAUDE_PLUGIN_ROOT}/scripts/_goal_check.py",
-            "timeout": 10
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/scripts/_goal_guard.py",
+            "timeout": 12
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/scripts/_goal_guard.py",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/scripts/_goal_guard.py",
+            "timeout": 3
           }
         ]
       }

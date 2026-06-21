@@ -52,7 +52,7 @@ with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
 
 # Verify
 print("[3/3] Verifying ...")
-for f in ["hooks/hooks.json", "scripts/_goal_check.py", ".claude-plugin/plugin.json"]:
+for f in ["hooks/hooks.json", "scripts/_goal_guard.py", ".claude-plugin/plugin.json"]:
     fp = os.path.join(PLUGIN_DEST, f)
     status = "OK" if os.path.exists(fp) else "MISS"
     print(f"  [{status}] {f}")

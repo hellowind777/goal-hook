@@ -2,11 +2,11 @@
   <img src="./readme_images/01-hero-banner.svg" alt="goal-hook" width="800">
 </div>
 
-# goal-hook
+# goal-hook v2.0
 
-A Claude Code plugin that keeps `/goal` sessions alive when the built-in Stop hook fails. File-based, no dependencies, crash-safe.
+Hybrid Guardian for Claude Code `/goal` tasks. Automatically prevents premature termination via behavioral structure analysis + LLM semantic fallback. Language-agnostic. Zero prompt modification required.
 
-[![Version](https://img.shields.io/badge/version-1.0.8-orange.svg)](./RELEASE_NOTES.md)
+[![Version](https://img.shields.io/badge/version-2.0.1-orange.svg)](./RELEASE_NOTES.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 [![LINUX DO](https://img.shields.io/badge/LINUX_DO-recognized-0A84FF?logo=linux&logoColor=white)](https://linux.do)
 
@@ -20,12 +20,13 @@ A Claude Code plugin that keeps `/goal` sessions alive when the built-in Stop ho
 <summary><strong>Click to expand</strong></summary>
 
 - [Overview](#overview)
+- [The Problem It Solves](#the-problem-it-solves)
 - [How It Works](#how-it-works)
 - [Quick Start](#quick-start)
 - [Usage](#usage)
 - [Recommended Settings](#recommended-settings)
+- [Architecture](#architecture)
 - [Files](#files)
-- [Version History](#version-history)
 - [FAQ](#faq)
 - [License](#license)
 
@@ -33,43 +34,69 @@ A Claude Code plugin that keeps `/goal` sessions alive when the built-in Stop ho
 
 ## Overview
 
-Claude Code's `/goal` uses a prompt-type Stop hook that asks a small model to evaluate progress. That model can output malformed JSON, causing **"Stop hook error: JSON validation failed"** — which kills your session mid-task.
+Claude Code's `/goal` has three typical failure modes in long-running tasks:
 
-**goal-hook** runs alongside the built-in hook as a command-type backup. When the built-in hook fails, this plugin still blocks based on a file on disk. Your task keeps running.
+1. **Interruption** — hook errors or API exceptions kill the `/goal` loop
+2. **Abandonment** — the model wants to quit early due to fatigue, long context, or loss of confidence
+3. **Standard downgrade** — the model silently lowers completion criteria ("good enough", "mostly done")
 
-### The Problem It Solves
+**goal-hook v2.0** uses a single command-type Stop hook with three-layer cascaded analysis to detect and block these premature terminations, keeping the `/goal` loop running until the task is genuinely complete.
 
-| Scenario | Without goal-hook | With goal-hook |
-|----------|-------------------|----------------|
-| Built-in hook outputs bad JSON | Session terminates | Blocked by file state, task continues |
-| Context compaction resets state | Lost | File survives on disk |
-| Session crash leaves stale state | Permanent block | Auto-expires after 7 days |
+### v2.0 vs v1.x
+
+| | v1.x | v2.0 |
+|---|---|---|
+| Detection | Prompt writes `.goal_status.json` | Auto-detected from transcript |
+| Prompt intrusion | Status file write code required | **Zero** — prompt focuses only on task goal |
+| Abandonment detection | None | Structural analysis + LLM semantic fallback |
+| Language support | Marker matching only | All languages (structural analysis is language-agnostic) |
+| Hooks | 1 Stop hook | 3 hooks (Stop + SessionStart + PostCompact) |
+
+## The Problem It Solves
+
+| Scenario | Without goal-hook | With goal-hook v2.0 |
+|----------|-------------------|---------------------|
+| `/goal` hook error mid-task | Session terminates | Detects abnormal stop_reason → BLOCK |
+| Model fatigue / wants to quit | Native evaluator passes | Structural signals + LLM confirm → BLOCK |
+| Model downgrades completion standard | Low-quality "done" | Structural analysis detects stall → BLOCK |
+| Post-compaction disorientation | Model forgets goal | PostCompact refreshes detection state |
+| Normal non-`/goal` session | — | Zero interference, immediate pass |
 
 ## How It Works
 
-The plugin registers a command-type Stop hook that checks a single status file (`scripts/data/.goal_status.json`):
+```
+Stop Hook fires
+  │
+  ├─ Phase 0: /goal Detection (dual-signal cross-validation)
+  │   ├─ Signal A: /goal command found in transcript
+  │   ├─ Signal B: Native /goal evaluator traces in transcript
+  │   └─ Not /goal → PASS (zero interference)
+  │
+  ├─ Phase 1: Interruption Recovery
+  │   └─ stop_reason != "end_turn" → BLOCK
+  │
+  ├─ Phase 2: Structural Scoring (<1ms, language-agnostic)
+  │   ├─ Signal 1: No tool calls in last turn        +30%
+  │   ├─ Signal 2: Trend collapse (msg+tool decline)  +25%
+  │   ├─ Signal 3: Stuck loop (3 turns same tools)    +20%
+  │   ├─ Signal 4: Read-only stall (5 turns no writes) +15%
+  │   ├─ ≥50% → BLOCK    <20% → PASS
+  │   └─ Otherwise → Phase 3
+  │
+  ├─ Phase 3: LLM Semantic Fallback (ambiguous zone only, ~10% of turns)
+  │   ├─ Haiku analyzes last_assistant_message
+  │   ├─ Abandonment/downgrade intent? → BLOCK
+  │   └─ API unavailable → conservative BLOCK
+  │
+  └─ Phase 4: Loop Protection
+      └─ stop_hook_active → threshold raised to 70%
+```
 
-<div align="center">
-  <img src="./readme_images/architecture.svg" alt="Architecture" width="640">
-</div>
+### Why not keywords/regex
 
-**Three states:**
+There are 200+ languages. A model can express "I give up" in any of them. Keyword regex is neither exhaustive nor maintainable.
 
-| File State | Hook Action | When |
-|------------|-------------|------|
-| File missing | **Pass** (no interference) | Not a `/goal` session |
-| `status: "in_progress"` | **Block** (keep running) | Goal loop active |
-| `status: "terminated"` | **Pass + cleanup** | Goal achieved |
-
-### Crash Recovery
-
-If a `/goal` session crashes before writing `terminated`, the stale `in_progress` file auto-expires after **168 hours (7 days)** of inactivity. Active GOAL_PROMPTs re-write the file every round, so live tasks never trigger the timeout.
-
-### Design Principles
-
-- **Zero dependencies** — no transcript reading, no env var probing, no CC internals
-- **File-persistent** — survives context compaction
-- **Non-invasive** — no file means no interference for non-`/goal` sessions
+v2.0's structural analysis **doesn't read text content** — it analyzes tool call patterns, message length trends, and turn structure from the transcript. These signals are identical in every language. The LLM semantic fallback only runs in the ~10% ambiguous zone and handles any language natively.
 
 ## Quick Start
 
@@ -117,7 +144,7 @@ The `setup.py` script validates that all plugin files are in place:
 [2/3] Registering in settings.json ...
 [3/3] Verifying ...
   [OK] hooks/hooks.json
-  [OK] scripts/_goal_check.py
+  [OK] scripts/_goal_guard.py
   [OK] .claude-plugin/plugin.json
 
 Installed: .../goal-hook-marketplace
@@ -126,32 +153,13 @@ Restart Claude Code to activate.
 
 ## Usage
 
-The hook itself requires no user action. Your GOAL_PROMPT writes the status file.
-
-**At startup:**
-
-```python
-import json
-json.dump({"status": "in_progress", "reason": "Task in progress"},
-          open("scripts/data/.goal_status.json", "w", encoding="utf-8"))
-```
-
-**On completion:**
-
-```python
-import json
-json.dump({"status": "terminated", "reason": "All checks passed"},
-          open("scripts/data/.goal_status.json", "w", encoding="utf-8"))
-```
-
-When the hook blocks, the agent sees instructions on how to self-terminate:
+**Your GOAL_PROMPT needs no plugin-specific code.** Just describe the task objective and acceptance criteria.
 
 ```
-[goal-hook] GOAL_PROMPT 循环执行中。
-当你确认目标已达成，执行:
-python -c "import json; json.dump({'status':'terminated','reason':'目标达成'},
-open('scripts/data/.goal_status.json','w',encoding='utf-8'))"
+/goal follow the prompt
 ```
+
+The plugin monitors automatically, blocking premature termination and keeping `/goal` running until genuine completion.
 
 ## Recommended Settings
 
@@ -161,60 +169,63 @@ open('scripts/data/.goal_status.json','w',encoding='utf-8'))"
 
 Claude Code v2.1.143+ enforces a maximum of 8 consecutive Stop hook blocks. Raise this to prevent legitimate long-running goal tasks from being killed.
 
+## Architecture
+
+```
+hooks/hooks.json
+├── Stop (command, 12s)          ← Core guardian: three-layer cascaded analysis
+├── SessionStart (command, 5s)   ← Stale state cleanup, session init
+└── PostCompact (command, 3s)    ← Post-compaction detection cache refresh
+
+scripts/_goal_guard.py (~300 lines, zero dependencies)
+├── handle_stop()           ← Phase 0-4 main logic
+├── handle_session_start()  ← State cleanup
+├── handle_post_compact()   ← Cache refresh
+├── _structural_score()     ← Behavioral signal weighting
+├── _llm_check()            ← LLM semantic fallback (urllib, inherits ANTHROPIC_API_KEY)
+└── _detect_goal_active()   ← Dual-signal /goal detection
+```
+
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `plugins/goal-hook/hooks/hooks.json` | Stop hook registration |
-| `plugins/goal-hook/scripts/_goal_check.py` | Status file checker (99 lines) |
-| `plugins/goal-hook/.claude-plugin/plugin.json` | Plugin metadata |
+| `plugins/goal-hook/hooks/hooks.json` | Three-hook registration (Stop + SessionStart + PostCompact) |
+| `plugins/goal-hook/scripts/_goal_guard.py` | Hybrid guardian main script |
+| `plugins/goal-hook/.claude-plugin/plugin.json` | Plugin metadata (v2.0.1) |
 | `.claude-plugin/marketplace.json` | Marketplace manifest |
 | `setup.py` | One-click cross-platform installer |
-
-## Version History
-
-### v1.0.8 (2026-06-20)
-
-- Comprehensive README rewrite (bilingual, hero banner, LINUX DO recognition)
-- LICENSE updated to dual-license (Apache 2.0 + CC BY 4.0)
-
-### v1.0.7 (2026-06-20)
-
-- Standard CC marketplace directory structure (`plugins/goal-hook/`)
-- Removed legacy `setup.bat` and `setup.ps1`
-
-### v1.0.6
-
-- Fixed Stop hook output to valid JSON schema (`{}` for pass, `{"decision":"block",...}` for block)
-- Plugin installs to CC plugins directory instead of pointing at repo
-- Windows junction handling in setup.py
-
-[Full release notes](./RELEASE_NOTES.md)
 
 ## FAQ
 
 <details>
 <summary><strong>Q: Does this interfere with non-/goal sessions?</strong></summary>
 
-**A:** No. If `.goal_status.json` doesn't exist, the hook passes immediately. Zero overhead, zero interference.
+**A:** No. The hook first detects whether `/goal` is active. Non-`/goal` sessions pass immediately — zero overhead, zero interference.
 </details>
 
 <details>
-<summary><strong>Q: What if my /goal session crashes mid-task?</strong></summary>
+<summary><strong>Q: Do I need to modify my GOAL_PROMPT?</strong></summary>
 
-**A:** The stale `in_progress` file auto-expires after 168 hours (7 days). Active tasks re-write the file every round, so they never hit this limit.
+**A:** No. v2.0 auto-detects `/goal` state from the transcript. It does not depend on any status file written by your prompt.
 </details>
 
 <details>
-<summary><strong>Q: Can I use this with any GOAL_PROMPT?</strong></summary>
+<summary><strong>Q: How much does the LLM fallback cost?</strong></summary>
 
-**A:** Yes. The hook is completely GOAL_PROMPT agnostic. It only reads the status file. Any prompt that writes `in_progress` / `terminated` to the expected path works.
+**A:** Only ~10% of turns trigger the LLM call (ambiguous structural signal zone). Each call is ~$0.0005. A 200-turn `/goal` task costs about $0.01 total.
 </details>
 
 <details>
-<summary><strong>Q: What happens when both the built-in hook and goal-hook run?</strong></summary>
+<summary><strong>Q: Does this conflict with the native /goal evaluator?</strong></summary>
 
-**A:** Claude Code runs all registered Stop hooks. The Command-type hook (goal-hook) executes independently. If the built-in prompt hook fails with a JSON error, the command hook still checks the file and blocks if needed.
+**A:** No. Both run in parallel — any single BLOCK prevents the stop. This plugin uses a command hook with independent judgment, not dependent on the native prompt hook.
+</details>
+
+<details>
+<summary><strong>Q: Will it block a genuinely completed task?</strong></summary>
+
+**A:** No. All three analysis layers have PASS conditions. When the task is truly done, structural signals remain below threshold and the LLM confirms genuine completion — the hook passes.
 </details>
 
 ## License
