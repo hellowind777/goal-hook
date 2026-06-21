@@ -2,11 +2,11 @@
   <img src="./readme_images/01-hero-banner.svg" alt="hello-goal" width="800">
 </div>
 
-# hello-goal v2.0
+# hello-goal v2.1
 
-混合守护插件 —— `/goal` 任务自动监控，防止非正常终止。行为结构分析 + LLM 语义兜底 + API 错误自动恢复。语言无关，零提示词侵入。
+混合守护插件 —— `/goal` 任务自动监控，防止非正常终止。行为结构分析 + LLM 语义分析统一混合判定 + API 错误自动恢复。语言无关，零提示词侵入。
 
-[![Version](https://img.shields.io/badge/version-2.0.3-orange.svg)](./RELEASE_NOTES.md)
+[![Version](https://img.shields.io/badge/version-2.1.0-orange.svg)](./RELEASE_NOTES.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 [![LINUX DO](https://img.shields.io/badge/LINUX_DO-recognized-0A84FF?logo=linux&logoColor=white)](https://linux.do)
 
@@ -40,7 +40,16 @@ Claude Code 的 `/goal` 功能在长任务中有三类典型失败模式：
 2. **主动放弃** —— 模型因疲劳、上下文过长、信心丧失而提前想结束
 3. **标准降级** —— 模型悄悄降低完成标准（"差不多了"、"基本可以了"）
 
-**hello-goal v2.0** 以单一 command-type Stop hook 实现四层级联守护，自动检测并阻止上述非正常终止，让 `/goal` 循环持续到任务真正完成。
+**hello-goal v2.1** 以单一 command-type Stop hook 实现三层级联守护，自动检测并阻止上述非正常终止，让 `/goal` 循环持续到任务真正完成。
+
+### v2.1 vs v2.0
+
+| | v2.0 | v2.1 |
+|---|---|---|
+| 判定模型 | 行为信号硬阈值（≥50%→BLOCK） | 所有可疑信号统一经 LLM 语义分析 |
+| 误判风险 | 降速写总结可能被误判为趋势塌缩 | LLM 区分任务正常收尾和提前放弃 |
+| LLM 调用量 | ~10% 轮次（仅模糊区间） | 所有有行为信号的轮次（确保正确性） |
+| 复杂度 | 4 阶段（Phase 2/3/4 + 阈值调整） | 3 阶段（统一 Phase 2：信号+LLM） |
 
 ### v2.0 vs v1.x
 
@@ -59,44 +68,41 @@ Claude Code 的 `/goal` 功能在长任务中有三类典型失败模式：
 |------|-------------|------------------|
 | `/goal` 中 hook 报错中断 | 会话终止 | 检测 stop_reason 异常 → BLOCK 继续 |
 | 第三方 API 错误（429/503 等） | `/goal` 循环中断 | 模式匹配 → 自动恢复 BLOCK |
-| 模型疲劳想放弃 | 原生评估器放行 | 行为结构信号 + LLM 语义确认 → BLOCK |
-| 模型降级完成标准 | 低质量"完成" | 结构分析检测到停滞 → BLOCK |
+| 模型疲劳想放弃 | 原生评估器放行 | 行为信号 + LLM 语义确认 → BLOCK |
+| 模型降级完成标准 | 低质量"完成" | 行为信号触发 LLM 分析 → BLOCK |
 | 上下文压缩后迷失 | 模型忘记目标 | PostCompact 刷新检测状态 |
-| 非 `/goal` 普通会话 | — | 零干预，pass 直接放行 |
+| 非 `/goal` 普通会话 | — | 零干预，PASS 直接放行 |
 
 ## 工作原理
 
 ```
 Stop Hook 触发
   │
-  ├─ Phase 0: /goal 检测（双信号交叉验证）
-  │   ├─ 信号A: transcript 中有 /goal 命令
-  │   ├─ 信号B: transcript 中有原生 /goal 评估器痕迹
+  ├─ Phase 0: /goal 检测（CC 原生标记 + 用户命令 + 缓存优先）
+  │   ├─ 信号A: CC 原生 "Goal set:" / "Goal cleared:" 标记
+  │   ├─ 信号B: 用户 /goal 命令解析（备用）
+  │   ├─ 信号C: stop_hook_summary 条目（仅确认）
   │   └─ 非 /goal → PASS（零干预）
   │
   ├─ Phase 1: 中断恢复
   │   └─ stop_reason != "end_turn" → BLOCK
   │
   ├─ Phase 1.5: API 错误自动恢复
-  │   ├─ 匹配模式: socket close, 429/503/502/504, rate limit, timeout...
+  │   ├─ 匹配 11 种模式: socket close, 429/503/502/504, rate limit, timeout...
   │   ├─ 来源: stop_reason, assistant 消息, transcript 尾部
   │   └─ 检测到 API 错误 → BLOCK（/goal 自动恢复继续）
   │
-  ├─ Phase 2: 行为结构评分（<1ms，语言无关）
-  │   ├─ 信号1: 末轮零工具调用      +30%
-  │   ├─ 信号2: 趋势塌缩（消息&工具下降） +25%
-  │   ├─ 信号3: 停滞循环（3轮相同工具）  +20%
-  │   ├─ 信号4: 只读停滞（5轮无写入）    +15%
-  │   ├─ ≥50% → BLOCK    <20% → PASS
-  │   └─ 其他 → Phase 3
-  │
-  ├─ Phase 3: LLM 语义兜底（仅模糊区间，~10% 轮次）
-  │   ├─ Haiku 分析 last_assistant_message
-  │   ├─ 放弃/降级意图? → BLOCK
-  │   └─ API 不可用 → 保守 BLOCK
-  │
-  └─ Phase 4: 循环防护
-      └─ stop_hook_active → 阈值提升至 70%
+  └─ Phase 2: 行为信号 + LLM 语义分析 —— 统一混合判定
+      ├─ 信号1: 末轮零工具调用      +30%
+      ├─ 信号2: 趋势塌缩（消息&工具下降） +25%
+      ├─ 信号3: 停滞循环（3轮相同工具）  +20%
+      ├─ 信号4: 只读停滞（5轮无写入）    +15%
+      ├─ score < 0.20 → PASS（无行为信号）
+      └─ score ≥ 0.20 → LLM 语义分析（含行为上下文）
+          ├─ Haiku 分析 last_assistant_message + 行为信号
+          ├─ 区分任务正常收尾与提前放弃
+          ├─ BLOCK → 继续    PASS → 放行
+          └─ API 不可用 → 保守 BLOCK
 ```
 
 ### 为什么不用关键词/正则
@@ -184,14 +190,14 @@ hooks/hooks.json
 ├── SessionStart (command, 5s)   ← 清理过期状态，初始化会话
 └── PostCompact (command, 3s)    ← 压缩后刷新检测缓存
 
-scripts/_goal_guard.py (~400 行, 零依赖)
-├── handle_stop()           ← Phase 0-4 主逻辑
+scripts/_goal_guard.py (~700 行, 零依赖)
+├── handle_stop()           ← Phase 0-2 主逻辑
 ├── handle_session_start()  ← 状态清理
-├── handle_post_compact()   ← 缓存刷新
-├── _structural_score()     ← 行为结构信号加权
-├── _detect_api_error()     ← API 错误模式匹配与自动恢复
-├── _llm_check()            ← LLM 语义兜底（urllib，继承 ANTHROPIC_API_KEY）
-└── _detect_goal_active()   ← 双信号 /goal 检测
+├── handle_post_compact()   ← 缓存刷新（保留 goal_detected 粘性先验）
+├── _detect_goal_active()   ← 三级 /goal 检测（原生标记 + 命令 + summary）
+├── _structural_score()     ← 行为结构信号加权（4 信号）
+├── _detect_api_error()     ← API 错误模式匹配（11 种模式，3 来源）
+└── _llm_check()            ← LLM 语义分析（含行为上下文，urllib）
 ```
 
 ## 文件说明
@@ -200,7 +206,7 @@ scripts/_goal_guard.py (~400 行, 零依赖)
 |------|------|
 | `plugins/hello-goal/hooks/hooks.json` | 三钩子注册（Stop + SessionStart + PostCompact） |
 | `plugins/hello-goal/scripts/_goal_guard.py` | 混合守护主脚本 |
-| `plugins/hello-goal/.claude-plugin/plugin.json` | 插件元数据（v2.0.3） |
+| `plugins/hello-goal/.claude-plugin/plugin.json` | 插件元数据（v2.1.0） |
 | `.claude-plugin/marketplace.json` | 市场清单 |
 | `setup.py` | 一键跨平台安装脚本 |
 
@@ -219,9 +225,9 @@ scripts/_goal_guard.py (~400 行, 零依赖)
 </details>
 
 <details>
-<summary><strong>Q: LLM 语义兜底会增加多少成本？</strong></summary>
+<summary><strong>Q: LLM 语义分析会增加多少成本？</strong></summary>
 
-**A:** 仅约 10% 的轮次触发 LLM 调用（行为信号模糊区间），每次 ~$0.0005。200 轮 /goal 任务总成本约 $0.01。
+**A:** 所有有行为信号（score ≥ 0.20）的轮次触发 LLM 分析。每次 Haiku 调用约 $0.0005。200 轮 /goal 任务若每轮都有行为信号，总成本约 $0.10。无行为信号的轮次（score < 0.20）立即放行，零 LLM 成本。
 </details>
 
 <details>
@@ -233,7 +239,7 @@ scripts/_goal_guard.py (~400 行, 零依赖)
 <details>
 <summary><strong>Q: 任务真的完成了，会被误拦吗？</strong></summary>
 
-**A:** 不会。四层分析都有 PASS 判断。任务正常完成时，行为信号低于阈值且 LLM 确认真完成，hook 放行。
+**A:** 不会。任务正常完成时，LLM 语义分析能识别真正的完成（最终报告、测试结果、全面总结）并返回 PASS —— 即使行为信号（无工具、趋势下降）看起来可疑。LLM 被明确指示区分任务正常收尾和提前放弃。
 </details>
 
 ## 许可证

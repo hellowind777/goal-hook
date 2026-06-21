@@ -263,7 +263,7 @@ def _detect_goal_active(transcript_path, session_id):
       - Goal cleared → 新 Goal set → 仍活跃（时间序判定）
       - 意外中断（stop_reason 异常）→ 由 handle_stop Phase 1 拦截
       - 人工 /goal clear → CC 生成 Goal cleared: → 本函数返回 False
-      - 模型偷懒降级 → 由 handle_stop Phase 2/3 行为评分+LLM 拦截
+      - 模型偷懒降级 → 由 handle_stop Phase 2 行为信号+LLM 混合拦截
     """
     state = _load_state()
     ss = state.get(session_id, {})
