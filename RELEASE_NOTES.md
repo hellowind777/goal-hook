@@ -1,8 +1,86 @@
 # Release Notes / 发布记录
 
-## v2.0.3 (2026-06-21)
+## v2.1.1 (2026-06-21)
 
-### 插件改名 + API 错误自动恢复
+### Goal 检测重写 + 统一混合判定 + 非 /goal 会话零误判
+
+对比 v2.0.3 的实质性变更：
+
+**Goal 检测全面重写 —— 零误判：**
+
+- 检测机制从"用户 `/goal` 命令正则解析 + `stop_hook_summary` 独立触发"重写为以 **CC 原生 `Goal set:` / `Goal cleared:` 标记为主信号**的三级体系。`Goal set:` 是 CC 内部系统消息，普通对话中绝不可能出现，从根源消除了误判。
+- 新增**缓存优先三阶段检测**：Phase 1 缓存快速路径（已确认非 /goal 会话零 transcript 读取直接返回）、Phase 2 时间序判定（按 `last_set` vs `last_clear` 索引处理反复进出 /goal）、Phase 3 全量扫描（仅首次检测 / PostCompact / 状态失效触发）。
+- **5 条目复检**：Phase 1 每次 Stop 仅读 5 条检查是否重新进入 /goal，发现 `Goal set:` 立即清除缓存走完整检测，解决"同一会话 /goal clear 后重新 /goal new_task"被永久误判为非活跃的 bug。
+- **PostCompact 粘性先验**：compact 后保留 `goal_detected`，配合 `stop_hook_summary` 存活检测确认 goal 仍活跃，不再丢失跟踪。
+- `stop_hook_summary` 从独立 OR 触发条件降级为**仅确认信号**，必须配合 `Goal set:` 标记或粘性先验知识才生效。
+- 支持同一会话反复进出 /goal：人工 clear 停止干预，意外中断继续守护，原生评估器完成则尊重裁决。
+
+**统一混合判定模型 —— 消除行为信号盲区：**
+
+- 去掉 v2.0.3 的 `BLOCK_THRESHOLD` 硬阈值（score ≥ 50% → 直接 BLOCK 绕过 LLM）。**所有 score ≥ 0.20 的行为信号统一经 LLM 语义分析最终裁决**，消除三大盲区：
+  - 降速写最终总结报告 → 不再被误判为趋势塌缩 (0.55)
+  - 同类批量操作后退出 → 不再被误判为停滞循环 (0.50)
+  - 大量只读分析后整理报告 → 不再被误判为只读停滞 (0.70)
+- `_llm_check` 增加 **`flags` 参数**，将行为信号上下文传入 LLM prompt，让 Haiku 结合"末轮无工具调用""趋势下降"等结构化信息做语义判断。
+- LLM prompt 新增**任务正常收尾判定引导**："if behavioral signals look like normal task wind-down (final report, comprehensive summary) and text indicates genuine completion, reply PASS"。
+
+**LLM 语义分析加固：**
+
+- 输出判定从 `"BLOCK" in text.upper()` 改为 **`startswith("BLOCK")` / `startswith("PASS")` 精确匹配**，消除对 UNBLOCK / BLOCKED / DO NOT BLOCK 的误匹配。
+- 无法解析的响应返回 `None`，调用方保守 BLOCK。
+
+**非 /goal 会话零干预保障：**
+
+- 修复了 `stop_hook_summary` 作为独立 OR 条件时，插件自身 Stop hook 输出被 CC 记录后形成自触发无限循环的 bug。
+- 修复了 `/goal\b` 正则中 `\b` 对 `/goal-oriented` 等文本误匹配的潜在误判（信号 A 作为主信号后此路径不再触发）。
+
+**其他：**
+
+- 移除 v2.0.3 中途引入的熔断器（连续 block ≥ 5 次强制 pass），避免破坏需要大量轮次的合法 /goal 长任务。
+- `.gitignore` 修正 `__pycache__/` 匹配路径。
+- 版本号 2.0.3 → 2.1.1。
+
+---
+
+### Goal Detection Rewrite + Unified Hybrid Decision + Zero False Trigger in Non-Goal Sessions
+
+Substantive changes compared to v2.0.3:
+
+**Goal detection fully rewritten — zero false positives:**
+
+- Detection mechanism rewritten from "user `/goal` command regex parsing + `stop_hook_summary` standalone trigger" to a **three-tier system with CC native `Goal set:` / `Goal cleared:` markers as primary signal**. `Goal set:` is an internal CC system message that can never appear in normal conversation, eliminating false positives at the root.
+- New **cache-first three-phase detection**: Phase 1 cache fast path (confirmed non-/goal sessions return immediately with zero transcript read), Phase 2 temporal ordering (tracks `last_set` vs `last_clear` index for repeated goal entry/exit), Phase 3 full scan (triggered only on first detection / PostCompact / state invalidation).
+- **5-entry re-check**: Phase 1 reads only 5 transcript entries per Stop to check for re-entry into /goal. Finding `Goal set:` clears cache and falls through to full detection, fixing the bug where `/goal clear` followed by `/goal new_task` was permanently misclassified.
+- **PostCompact sticky prior**: `goal_detected` preserved after compact, combined with `stop_hook_summary` liveness check to confirm goal still active without losing tracking.
+- `stop_hook_summary` downgraded from standalone OR trigger to **confirming signal only**, requiring `Goal set:` marker or sticky prior knowledge to take effect.
+- Supports repeated goal entry/exit within the same session: manual clear stops intervention, unexpected interruption continues guarding, native evaluator completion is respected.
+
+**Unified hybrid decision model — eliminates behavioral signal blind spots:**
+
+- Removed v2.0.3's `BLOCK_THRESHOLD` hard threshold (score ≥ 50% → direct BLOCK bypassing LLM). **All behavioral signals (score ≥ 0.20) now go through LLM semantic analysis for final decision**, eliminating three blind spots:
+  - Writing final summary report → no longer misclassified as trend collapse (0.55)
+  - Exiting after batch operations → no longer misclassified as stuck loop (0.50)
+  - Compiling analysis after extensive reading → no longer misclassified as read-only stall (0.70)
+- `_llm_check` adds **`flags` parameter**, passing behavioral signal context into LLM prompt so Haiku can combine structured information ("no tool calls in last turn", "trend declining") with semantic judgment.
+- LLM prompt adds **task wind-down recognition guidance**: "if behavioral signals look like normal task wind-down (final report, comprehensive summary) and text indicates genuine completion, reply PASS".
+
+**LLM semantic analysis hardening:**
+
+- Output parsing changed from `"BLOCK" in text.upper()` to **`startswith("BLOCK")` / `startswith("PASS")` exact matching**, eliminating false matches on UNBLOCK / BLOCKED / DO NOT BLOCK.
+- Unparseable responses return `None`, caller conservatively BLOCKs.
+
+**Zero interference guarantee for non-/goal sessions:**
+
+- Fixed the bug where `stop_hook_summary` as standalone OR condition caused the plugin's own Stop hook output to be recorded by CC, creating a self-triggering infinite loop.
+- Fixed potential false match of `/goal\b` regex on text like `/goal-oriented` (signal A as primary renders this path untriggered).
+
+**Other:**
+
+- Removed circuit breaker (≥5 consecutive blocks → force pass) introduced mid-development, preventing disruption of legitimate long-running /goal tasks requiring many turns.
+- `.gitignore` fixed `__pycache__/` matching path.
+- Version 2.0.3 → 2.1.1.
+
+---
 
 对比 v2.0.1 的实质性变更：
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""hello-goal v2.1 — Hybrid Guardian for /goal tasks.
+"""hello-goal v2.1.1 — Hybrid Guardian for /goal tasks.
 
 三层级联守护:
   Phase 1:   stop_reason 异常 → 直接 BLOCK（中断恢复）
