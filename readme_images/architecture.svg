@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 520" font-family="system-ui, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 560" font-family="system-ui, sans-serif">
   <defs>
     <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
       <path d="M0,0 L8,3 L0,6 Z" fill="#555"/>
@@ -12,78 +12,79 @@
   </defs>
 
   <!-- Title -->
-  <text x="360" y="30" text-anchor="middle" font-size="16" font-weight="bold" fill="#333">hello-goal v2.1.2 Hybrid Guardian</text>
+  <text x="360" y="30" text-anchor="middle" font-size="16" font-weight="bold" fill="#333">hello-goal v2.2.0 Global API Recovery + Hybrid Guardian</text>
 
   <!-- Stop Event -->
   <rect x="260" y="50" width="200" height="36" rx="6" fill="#4a90d9" stroke="#357abd" stroke-width="1.5"/>
   <text x="360" y="73" text-anchor="middle" font-size="13" fill="#fff" font-weight="bold">Stop Event</text>
 
-  <!-- Phase 0 -->
+  <!-- Phase 0: API Error (Global) -->
   <line x1="360" y1="86" x2="360" y2="100" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <rect x="240" y="102" width="240" height="34" rx="6" fill="#f5f5f5" stroke="#999" stroke-width="1.5"/>
-  <text x="360" y="124" text-anchor="middle" font-size="11" fill="#333">Phase 0: /goal Detection</text>
+  <rect x="200" y="102" width="320" height="34" rx="6" fill="#ffebee" stroke="#e53935" stroke-width="1.5"/>
+  <text x="360" y="124" text-anchor="middle" font-size="11" fill="#c62828">Phase 0 (Global): API Error Detection</text>
+
+  <!-- API Error → Block -->
+  <line x1="520" y1="119" x2="590" y2="119" stroke="#c62828" stroke-width="1.5" marker-end="url(#arrowRed)"/>
+  <rect x="595" y="106" width="100" height="26" rx="6" fill="#ffebee" stroke="#e53935" stroke-width="1.5"/>
+  <text x="645" y="124" text-anchor="middle" font-size="11" fill="#c62828" font-weight="bold">BLOCK</text>
+  <text x="645" y="148" text-anchor="middle" font-size="8" fill="#888">(global)</text>
+
+  <!-- Phase 1: /goal Detection -->
+  <line x1="360" y1="136" x2="360" y2="160" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="240" y="162" width="240" height="34" rx="6" fill="#f5f5f5" stroke="#999" stroke-width="1.5"/>
+  <text x="360" y="184" text-anchor="middle" font-size="11" fill="#333">Phase 1: /goal Detection</text>
 
   <!-- Not goal → Pass -->
-  <line x1="480" y1="119" x2="580" y2="119" stroke="#2e7d32" stroke-width="1.5" marker-end="url(#arrowGreen)"/>
-  <rect x="585" y="106" width="100" height="26" rx="6" fill="#e8f5e9" stroke="#4caf50" stroke-width="1.5"/>
-  <text x="635" y="124" text-anchor="middle" font-size="11" fill="#2e7d32" font-weight="bold">PASS</text>
+  <line x1="480" y1="179" x2="580" y2="179" stroke="#2e7d32" stroke-width="1.5" marker-end="url(#arrowGreen)"/>
+  <rect x="585" y="166" width="100" height="26" rx="6" fill="#e8f5e9" stroke="#4caf50" stroke-width="1.5"/>
+  <text x="635" y="184" text-anchor="middle" font-size="11" fill="#2e7d32" font-weight="bold">PASS</text>
 
-  <!-- Phase 1 -->
-  <line x1="360" y1="136" x2="360" y2="150" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <rect x="240" y="152" width="240" height="34" rx="6" fill="#e3f2fd" stroke="#4a90d9" stroke-width="1.5"/>
-  <text x="360" y="174" text-anchor="middle" font-size="11" fill="#1565c0">Phase 1: stop_reason Check</text>
+  <!-- Phase 2: stop_reason -->
+  <line x1="360" y1="196" x2="360" y2="210" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="240" y="212" width="240" height="34" rx="6" fill="#e3f2fd" stroke="#4a90d9" stroke-width="1.5"/>
+  <text x="360" y="234" text-anchor="middle" font-size="11" fill="#1565c0">Phase 2: stop_reason Check</text>
 
   <!-- Abnormal → Block -->
-  <line x1="480" y1="169" x2="580" y2="169" stroke="#c62828" stroke-width="1.5" marker-end="url(#arrowRed)"/>
-  <rect x="585" y="156" width="100" height="26" rx="6" fill="#ffebee" stroke="#e53935" stroke-width="1.5"/>
-  <text x="635" y="174" text-anchor="middle" font-size="11" fill="#c62828" font-weight="bold">BLOCK</text>
+  <line x1="480" y1="229" x2="580" y2="229" stroke="#c62828" stroke-width="1.5" marker-end="url(#arrowRed)"/>
+  <rect x="585" y="216" width="100" height="26" rx="6" fill="#ffebee" stroke="#e53935" stroke-width="1.5"/>
+  <text x="635" y="234" text-anchor="middle" font-size="11" fill="#c62828" font-weight="bold">BLOCK</text>
 
-  <!-- Phase 2 -->
-  <line x1="360" y1="186" x2="360" y2="200" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <rect x="220" y="202" width="280" height="34" rx="6" fill="#e3f2fd" stroke="#4a90d9" stroke-width="1.5"/>
-  <text x="360" y="224" text-anchor="middle" font-size="11" fill="#1565c0">Phase 2: Structural Scoring (&lt;1ms)</text>
+  <!-- Phase 3: Structural Scoring -->
+  <line x1="360" y1="246" x2="360" y2="260" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="220" y="262" width="280" height="34" rx="6" fill="#e3f2fd" stroke="#4a90d9" stroke-width="1.5"/>
+  <text x="360" y="284" text-anchor="middle" font-size="11" fill="#1565c0">Phase 3: Structural Scoring (&lt;1ms)</text>
 
   <!-- Signal boxes -->
-  <rect x="40" y="255" width="150" height="30" rx="4" fill="#f5f5f5" stroke="#bbb" stroke-width="1"/>
-  <text x="115" y="274" text-anchor="middle" font-size="9" fill="#555">No tool calls +30%</text>
+  <rect x="40" y="315" width="150" height="30" rx="4" fill="#f5f5f5" stroke="#bbb" stroke-width="1"/>
+  <text x="115" y="334" text-anchor="middle" font-size="9" fill="#555">No tool calls +30%</text>
+  <rect x="200" y="315" width="150" height="30" rx="4" fill="#f5f5f5" stroke="#bbb" stroke-width="1"/>
+  <text x="275" y="334" text-anchor="middle" font-size="9" fill="#555">Trend collapse +25%</text>
+  <rect x="360" y="315" width="150" height="30" rx="4" fill="#f5f5f5" stroke="#bbb" stroke-width="1"/>
+  <text x="435" y="334" text-anchor="middle" font-size="9" fill="#555">Stuck loop +20%</text>
+  <rect x="520" y="315" width="150" height="30" rx="4" fill="#f5f5f5" stroke="#bbb" stroke-width="1"/>
+  <text x="595" y="334" text-anchor="middle" font-size="9" fill="#555">Read-only stall +15%</text>
 
-  <rect x="200" y="255" width="150" height="30" rx="4" fill="#f5f5f5" stroke="#bbb" stroke-width="1"/>
-  <text x="275" y="274" text-anchor="middle" font-size="9" fill="#555">Trend collapse +25%</text>
+  <!-- Thresholds -->
+  <rect x="170" y="365" width="180" height="26" rx="6" fill="#fff3e0" stroke="#ff9800" stroke-width="1.5"/>
+  <text x="260" y="383" text-anchor="middle" font-size="10" fill="#e65100" font-weight="bold">score ≥ 0.20 → LLM Analysis</text>
+  <rect x="390" y="365" width="130" height="26" rx="6" fill="#e8f5e9" stroke="#4caf50" stroke-width="1.5"/>
+  <text x="455" y="383" text-anchor="middle" font-size="10" fill="#2e7d32" font-weight="bold">score &lt; 0.20 → PASS</text>
 
-  <rect x="360" y="255" width="150" height="30" rx="4" fill="#f5f5f5" stroke="#bbb" stroke-width="1"/>
-  <text x="435" y="274" text-anchor="middle" font-size="9" fill="#555">Stuck loop +20%</text>
-
-  <rect x="520" y="255" width="150" height="30" rx="4" fill="#f5f5f5" stroke="#bbb" stroke-width="1"/>
-  <text x="595" y="274" text-anchor="middle" font-size="9" fill="#555">Read-only stall +15%</text>
-
-  <!-- Score thresholds -->
-  <rect x="170" y="305" width="180" height="26" rx="6" fill="#fff3e0" stroke="#ff9800" stroke-width="1.5"/>
-  <text x="260" y="323" text-anchor="middle" font-size="10" fill="#e65100" font-weight="bold">score ≥ 0.20 → Phase 3 (LLM)</text>
-
-  <rect x="390" y="305" width="130" height="26" rx="6" fill="#e8f5e9" stroke="#4caf50" stroke-width="1.5"/>
-  <text x="455" y="323" text-anchor="middle" font-size="10" fill="#2e7d32" font-weight="bold">score &lt; 0.20 → PASS</text>
-
-  <!-- Phase 3 -->
-  <line x1="260" y1="331" x2="355" y2="350" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <rect x="240" y="352" width="230" height="34" rx="6" fill="#f3e5f5" stroke="#9c27b0" stroke-width="1.5"/>
-  <text x="355" y="374" text-anchor="middle" font-size="11" fill="#6a1b9a">Phase 3: LLM Semantic (~10%)</text>
+  <!-- LLM Semantic -->
+  <line x1="260" y1="391" x2="355" y2="410" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="240" y="412" width="230" height="34" rx="6" fill="#f3e5f5" stroke="#9c27b0" stroke-width="1.5"/>
+  <text x="355" y="434" text-anchor="middle" font-size="11" fill="#6a1b9a">LLM Semantic Analysis (~$0.0005/call)</text>
 
   <!-- LLM outcomes -->
-  <rect x="130" y="405" width="130" height="26" rx="6" fill="#ffebee" stroke="#e53935" stroke-width="1.5"/>
-  <text x="195" y="423" text-anchor="middle" font-size="10" fill="#c62828" font-weight="bold">Abandon → BLOCK</text>
+  <rect x="130" y="465" width="130" height="26" rx="6" fill="#ffebee" stroke="#e53935" stroke-width="1.5"/>
+  <text x="195" y="483" text-anchor="middle" font-size="10" fill="#c62828" font-weight="bold">Abandon → BLOCK</text>
+  <rect x="290" y="465" width="130" height="26" rx="6" fill="#e8f5e9" stroke="#4caf50" stroke-width="1.5"/>
+  <text x="355" y="483" text-anchor="middle" font-size="10" fill="#2e7d32" font-weight="bold">Continue → PASS</text>
+  <rect x="450" y="465" width="130" height="26" rx="6" fill="#fff3e0" stroke="#ff9800" stroke-width="1.5"/>
+  <text x="515" y="483" text-anchor="middle" font-size="10" fill="#e65100" font-weight="bold">Fail → BLOCK</text>
 
-  <rect x="290" y="405" width="130" height="26" rx="6" fill="#e8f5e9" stroke="#4caf50" stroke-width="1.5"/>
-  <text x="355" y="423" text-anchor="middle" font-size="10" fill="#2e7d32" font-weight="bold">Continue → PASS</text>
-
-  <rect x="450" y="405" width="130" height="26" rx="6" fill="#fff3e0" stroke="#ff9800" stroke-width="1.5"/>
-  <text x="515" y="423" text-anchor="middle" font-size="10" fill="#e65100" font-weight="bold">Fail → BLOCK</text>
-
-  <!-- Phase 1.5: API Error Recovery -->
-  <text x="40" y="465" font-size="10" fill="#888">Phase 1.5: API Error Recovery — 10 error patterns on 3 sources (stop_reason + assistant + transcript)</text>
-
-  <!-- Additional hooks -->
-  <text x="40" y="485" font-size="10" fill="#888">Aux hooks: SessionStart (cleanup stale state) + PostCompact (refresh detection cache)</text>
-
-  <!-- Footer -->
-  <text x="40" y="510" font-size="10" fill="#999">Language-agnostic · Zero dependencies · No prompt modification needed</text>
+  <!-- Footer info -->
+  <text x="40" y="515" font-size="10" fill="#888">Aux hooks: SessionStart (cleanup stale state) + PostCompact (refresh detection cache)</text>
+  <text x="40" y="535" font-size="10" fill="#888">Global exception guard: unhandled internal error → BLOCK</text>
+  <text x="40" y="555" font-size="10" fill="#999">Language-agnostic · Zero dependencies · No prompt modification needed</text>
 </svg>

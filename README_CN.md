@@ -2,11 +2,11 @@
   <img src="./readme_images/01-hero-banner.svg" alt="hello-goal" width="800">
 </div>
 
-# hello-goal v2.1.2
+# hello-goal v2.2.0
 
-混合守护插件 —— `/goal` 任务自动监控，防止非正常终止。行为结构分析 + LLM 语义分析统一混合判定 + API 错误自动恢复。语言无关，零提示词侵入。
+全局 API 恢复 + 混合守护插件。API 错误（socket 断开、429、502、503）无论是否 /goal 模式均自动恢复。在 /goal 模式下，额外通过行为结构分析 + LLM 语义分析防止任务非正常终止。语言无关，零外部依赖。
 
-[![Version](https://img.shields.io/badge/version-2.1.2-orange.svg)](./RELEASE_NOTES.md)
+[![Version](https://img.shields.io/badge/version-2.2.0-orange.svg)](./RELEASE_NOTES.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 [![LINUX DO](https://img.shields.io/badge/LINUX_DO-recognized-0A84FF?logo=linux&logoColor=white)](https://linux.do)
 
@@ -40,7 +40,17 @@ Claude Code 的 `/goal` 功能在长任务中有三类典型失败模式：
 2. **主动放弃** —— 模型因疲劳、上下文过长、信心丧失而提前想结束
 3. **标准降级** —— 模型悄悄降低完成标准（"差不多了"、"基本可以了"）
 
-**hello-goal v2.1.2** 以单一 command-type Stop hook 实现三层级联守护，自动检测并阻止上述非正常终止，让 `/goal` 循环持续到任务真正完成。
+此外，**API 错误**（第三方大模型 socket 断开、429/502/503）会中断**任何**任务——无论是否 /goal 模式。hello-goal v2.2.0 在全局 Phase 0 优先拦截，自动恢复。
+
+**hello-goal v2.2.0** 以单一 command-type Stop hook 实现四层级联守护。
+
+### v2.2 vs v2.1
+
+| | v2.1 | v2.2 |
+|---|---|---|
+| API 错误恢复 | 仅 /goal 模式（Phase 1.5） | 全局（Phase 0），优先于 /goal 检测 |
+| 非 /goal 的 API 错误 | PASS（任务中断） | BLOCK（自动恢复） |
+| Phase 顺序 | /goal → 中断 → API → 行为+LLM | API → /goal → 中断 → 行为+LLM |
 
 ### v2.1 vs v2.0
 
@@ -64,35 +74,35 @@ Claude Code 的 `/goal` 功能在长任务中有三类典型失败模式：
 
 ## 解决了什么问题
 
-| 场景 | 无 hello-goal | 有 hello-goal v2.1.2 |
+| 场景 | 无 hello-goal | 有 hello-goal v2.2.0 |
 |------|-------------|------------------|
+| 任意会话 API 错误（socket/429/503） | 任务永久中断 | Phase 0 检测 → 自动恢复 BLOCK |
 | `/goal` 中 hook 报错中断 | 会话终止 | 检测 stop_reason 异常 → BLOCK 继续 |
-| 第三方 API 错误（429/503 等） | `/goal` 循环中断 | 模式匹配 → 自动恢复 BLOCK |
 | 模型疲劳想放弃 | 原生评估器放行 | 行为信号 + LLM 语义确认 → BLOCK |
 | 模型降级完成标准 | 低质量"完成" | 行为信号触发 LLM 分析 → BLOCK |
 | 上下文压缩后迷失 | 模型忘记目标 | PostCompact 刷新检测状态 |
-| 非 `/goal` 普通会话 | — | 零干预，PASS 直接放行 |
+| 普通会话（无 API 错误） | — | 零干预，PASS 直接放行 |
 
 ## 工作原理
 
 ```
 Stop Hook 触发
   │
-  ├─ Phase 0: /goal 检测（CC 原生标记 + 用户命令 + 缓存优先）
+  ├─ Phase 0 (全局): API 错误检测
+  │   ├─ 匹配 11 种模式: socket close, 429/503/502/504, rate limit, timeout...
+  │   ├─ 来源: stop_reason, assistant 消息, transcript 尾部
+  │   └─ 检测到 API 错误 → BLOCK（自动恢复，无论是否 /goal 模式）
+  │
+  ├─ Phase 1: /goal 检测（CC 原生标记 + 用户命令 + 缓存优先）
   │   ├─ 信号A: CC 原生 "Goal set:" / "Goal cleared:" 标记
   │   ├─ 信号B: 用户 /goal 命令解析（备用）
   │   ├─ 信号C: stop_hook_summary 条目（仅确认）
   │   └─ 非 /goal → PASS（零干预）
   │
-  ├─ Phase 1: 中断恢复
+  ├─ Phase 2: 中断恢复
   │   └─ stop_reason != "end_turn" → BLOCK
   │
-  ├─ Phase 1.5: API 错误自动恢复
-  │   ├─ 匹配 11 种模式: socket close, 429/503/502/504, rate limit, timeout...
-  │   ├─ 来源: stop_reason, assistant 消息, transcript 尾部
-  │   └─ 检测到 API 错误 → BLOCK（/goal 自动恢复继续）
-  │
-  └─ Phase 2: 行为信号 + LLM 语义分析 —— 统一混合判定
+  └─ Phase 3: 行为信号 + LLM 语义分析 —— 统一混合判定
       ├─ 信号1: 末轮零工具调用      +30%
       ├─ 信号2: 趋势塌缩（消息&工具下降） +25%
       ├─ 信号3: 停滞循环（3轮相同工具）  +20%
@@ -103,14 +113,14 @@ Stop Hook 触发
           ├─ 区分任务正常收尾与提前放弃
           ├─ BLOCK → 继续    PASS → 放行
           └─ API 不可用 → 保守 BLOCK
-  └─ 全局异常兜底（v2.1.2）：未预期内部异常 → 输出合法 BLOCK，循环不中断
+  └─ 全局异常兜底：未预期内部异常 → BLOCK
 ```
 
 ### 为什么不用关键词/正则
 
 世界上有 200+ 种语言，模型可以用任意语言表达"放弃"。关键词正则既不可穷举也不可维护。
 
-v2.1.2 的行为分析**不读文字内容**——只对 transcript 中的工具调用模式、消息长度趋势、轮次结构打分。这些信号在任何语言中完全相同。LLM 语义分析对所有可疑轮次做最终裁决，天然理解任意语言。
+v2.2.0 的行为分析**不读文字内容**——只对 transcript 中的工具调用模式、消息长度趋势、轮次结构打分。这些信号在任何语言中完全相同。LLM 语义分析对所有可疑轮次做最终裁决，天然理解任意语言。
 
 ## 快速开始
 
@@ -173,7 +183,7 @@ python setup.py
 /goal 按提示词执行
 ```
 
-插件全程自动监控，检测到非正常终止时自动阻止并让 /goal 继续。
+插件全程自动监控，检测到非正常终止时自动阻止并让 /goal 继续。API 错误在任意会话中均自动恢复。
 
 ## 推荐设置
 
@@ -191,8 +201,8 @@ hooks/hooks.json
 ├── SessionStart (command, 5s)   ← 清理过期状态，初始化会话
 └── PostCompact (command, 3s)    ← 压缩后刷新检测缓存
 
-scripts/_goal_guard.py (~700 行, 零依赖)
-├── handle_stop()           ← Phase 0-2 主逻辑
+scripts/_goal_guard.py (~720 行, 零依赖)
+├── handle_stop()           ← Phase 0-3 主逻辑
 ├── handle_session_start()  ← 状态清理
 ├── handle_post_compact()   ← 缓存刷新（保留 goal_detected 粘性先验）
 ├── _detect_goal_active()   ← 三级 /goal 检测（原生标记 + 命令 + summary）
@@ -207,7 +217,7 @@ scripts/_goal_guard.py (~700 行, 零依赖)
 |------|------|
 | `plugins/hello-goal/hooks/hooks.json` | 三钩子注册（Stop + SessionStart + PostCompact） |
 | `plugins/hello-goal/scripts/_goal_guard.py` | 混合守护主脚本 |
-| `plugins/hello-goal/.claude-plugin/plugin.json` | 插件元数据（v2.1.2） |
+| `plugins/hello-goal/.claude-plugin/plugin.json` | 插件元数据（v2.2.0） |
 | `.claude-plugin/marketplace.json` | 市场清单 |
 | `setup.py` | 一键跨平台安装脚本 |
 
@@ -216,13 +226,13 @@ scripts/_goal_guard.py (~700 行, 零依赖)
 <details>
 <summary><strong>Q: 会影响非 /goal 会话吗？</strong></summary>
 
-**A:** 不会。hook 先检测 /goal 是否活跃。非 /goal 会话直接 pass，零开销零干扰。
+**A:** 对 API 错误——会响应，但这正是你需要的行为（socket 断开不应中断你的任务）。对正常结束的非 API 错误 Stop，插件立即 PASS，零干预。
 </details>
 
 <details>
 <summary><strong>Q: 需要修改提示词吗？</strong></summary>
 
-**A:** 不需要。v2.1.2 通过 CC 原生标记从 transcript 自动检测 /goal 状态，不依赖提示词写入任何文件。
+**A:** 不需要。v2.2.0 通过 CC 原生标记从 transcript 自动检测 /goal 状态，不依赖提示词写入任何文件。
 </details>
 
 <details>
@@ -246,7 +256,7 @@ scripts/_goal_guard.py (~700 行, 零依赖)
 <details>
 <summary><strong>Q: 插件自身出错了怎么办？</strong></summary>
 
-**A:** v2.1.2 在入口增加了全局异常兜底。任何未预期的内部异常（文件竞争、磁盘 I/O 异常、状态损坏）都会被捕获，输出合法的 BLOCK 决策让 /goal 继续执行，不会因 Python 错误输出导致 "JSON validation failed" 中断循环。
+**A:** 主入口包含全局异常兜底。任何未预期的内部异常（文件竞争、磁盘 I/O 异常、状态损坏）都会被捕获，输出合法的 BLOCK 决策让任务继续执行，不会因 Python 错误导致 "JSON validation failed" 中断任务。
 </details>
 
 ## 许可证

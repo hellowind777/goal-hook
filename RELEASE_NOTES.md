@@ -1,5 +1,61 @@
 # Release Notes / 发布记录
 
+## v2.2.0 (2026-06-23)
+
+### API 错误全局自动恢复 —— 无论是否 /goal 模式均响应
+
+对比 v2.1.2 的实质性变更：
+
+**API 错误检测提升为全局 Phase 0：**
+
+- `handle_stop()` 执行顺序重排：原 Phase 1.5（API 错误模式匹配）移至 Phase 0，**优先于 /goal 检测**。此前 API 错误恢复仅在 /goal 会话中生效，非 /goal 会话遇到 socket 断开、429、502、503 等第三方大模型瞬时故障时直接 PASS 导致任务永久中断。
+- 新逻辑：Phase 0 检测到 API 错误 → BLOCK → 任务自动恢复继续执行，无论当前是否处于 /goal 模式。Phase 1 才是 /goal 检测（非 /goal → PASS），Phase 2/3 为原有的 /goal 专属守护。
+- `/goal` 模式下的 API 错误恢复行为不变，仍能自动 BLOCK 恢复。
+
+**Stop Hook 新 Phase 顺序：**
+
+| Phase | 范围 | 检测内容 | 动作 |
+|-------|------|---------|------|
+| Phase 0 | 全局 | API 错误模式匹配（socket/429/502/503 等 11 种） | BLOCK |
+| Phase 1 | /goal | /goal 活跃检测 | 非 /goal → PASS |
+| Phase 2 | /goal | stop_reason 异常 | BLOCK |
+| Phase 3 | /goal | 行为信号 + LLM 语义分析 | 混合判定 |
+
+**版本号同步：**
+
+- `_goal_guard.py` 模块文档版本号 2.1.2 → 2.2.0
+- `plugin.json` 版本号 2.1.2 → 2.2.0
+- `marketplace.json` 版本号 2.1.2 → 2.2.0
+
+---
+
+### Global API Error Recovery — Responds Regardless of /goal Mode
+
+Substantive changes compared to v2.1.2:
+
+**API error detection promoted to global Phase 0:**
+
+- `handle_stop()` execution order reorganized: former Phase 1.5 (API error pattern matching) moved to Phase 0, **before /goal detection**. Previously, API error recovery only worked during /goal sessions; non-/goal sessions encountering socket disconnections, 429, 502, 503, and other third-party LLM transient errors would PASS, causing permanent task interruption.
+- New logic: Phase 0 detects API error → BLOCK → task auto-resumes execution, regardless of whether /goal mode is active. Phase 1 handles /goal detection (non-/goal → PASS), Phases 2/3 provide the original /goal-specific guarding.
+- API error recovery behavior in /goal mode is unchanged, still auto-BLOCKs and resumes.
+
+**New Stop Hook Phase ordering:**
+
+| Phase | Scope | Detection | Action |
+|-------|-------|-----------|--------|
+| Phase 0 | Global | API error pattern matching (11 patterns: socket/429/502/503 etc.) | BLOCK |
+| Phase 1 | /goal | /goal active detection | non-/goal → PASS |
+| Phase 2 | /goal | abnormal stop_reason | BLOCK |
+| Phase 3 | /goal | behavioral signals + LLM semantic analysis | hybrid decision |
+
+**Version sync:**
+
+- `_goal_guard.py` module docstring version 2.1.2 → 2.2.0
+- `plugin.json` version 2.1.2 → 2.2.0
+- `marketplace.json` version 2.1.2 → 2.2.0
+
+---
+
 ## v2.1.2 (2026-06-22)
 
 ### Stop Hook 全局异常兜底 —— 杜绝 JSON 验证失败导致 /goal 循环中断

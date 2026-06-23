@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""hello-goal v2.1.2 — Hybrid Guardian for /goal tasks.
+"""hello-goal v2.2.0 — Global API Recovery + Hybrid /goal Guardian.
 
-三层级联守护:
-  Phase 1:   stop_reason 异常 → 直接 BLOCK（中断恢复）
-  Phase 1.5: API 错误模式匹配 → BLOCK（第三方大模型容错恢复）
-  Phase 2:   行为信号加权 + LLM 语义分析 → 混合判定
+Stop Hook 处理顺序（按优先级）:
+  Phase 0 (全局): API 错误模式匹配 → BLOCK，恢复任务
+                  （socket 断开/429/502/503 等第三方大模型瞬时故障，
+                   无论是否 /goal 模式均自动恢复，避免任务永久中断。）
+  Phase 1 (/goal): 非 /goal 会话 → PASS，零干预
+  Phase 2 (/goal): stop_reason 异常 → BLOCK，中断恢复
+  Phase 3 (/goal): 行为信号加权 + LLM 语义分析 → 混合判定
 
-  行为信号触发后统一经 LLM 语义分析确认，消除纯行为信号的盲区：
-  降速写总结被误判为趋势塌缩、同类批量操被误判为停滞循环等。
+行为信号触发后统一经 LLM 语义分析确认，消除纯行为信号的盲区：
+降速写总结被误判为趋势塌缩、同类批量操被误判为停滞循环等。
 
 零外部依赖。语言无关（行为结构分析 + LLM 自然理解任意语言）。
 
@@ -605,32 +608,38 @@ def _detect_api_error(ctx):
 # ============================================================
 
 def handle_stop(ctx):
-    """Stop hook: 核心守护逻辑。"""
+    """Stop hook: 核心守护逻辑。
+
+    Phase 0 (全局): API 错误检测 —— 无论是否 /goal 模式，API 错误中断所有任务，
+                   必须自动恢复。socket 断开、429/502/503 等均为第三方大模型
+                   瞬时故障，不应让任务永久中断。
+    Phase 1 (/goal): 正常结束的 stop 才进入 /goal 专属守护（异常中断 + 行为信号
+                     + LLM 语义分析混合判定）。
+    """
     session_id = ctx.get("session_id", "")
     transcript_path = ctx.get("transcript_path", "")
     stop_reason = ctx.get("stop_reason", "end_turn")
     last_msg = ctx.get("last_assistant_message", "")
 
-    # Phase 0: /goal 检测，非 /goal 会话零干预
+    # Phase 0 (全局): API 错误检测 —— 优先于 /goal 检查，全局响应
+    api_error, api_info = _detect_api_error(ctx)
+    if api_error:
+        return _block(
+            "[hello-goal] 检测到 API 错误 (" + api_info + ")。任务自动恢复，继续执行。"
+        )
+
+    # Phase 1: /goal 检测，非 /goal 会话后续不再干预
     if not _detect_goal_active(transcript_path, session_id):
         return _pass()
 
-    # Phase 1: 中断恢复 —— 非正常结束直接 BLOCK
+    # Phase 2: 中断恢复 —— 非正常结束直接 BLOCK
     if stop_reason != "end_turn":
         return _block(
             "[hello-goal] 检测到异常中断 (stop_reason=" + stop_reason + ")。"
             "/goal 任务继续执行。"
         )
 
-    # Phase 1.5: API 错误恢复 —— 第三方大模型常见错误时 /goal 继续
-    api_error, api_info = _detect_api_error(ctx)
-    if api_error:
-        return _block(
-            "[hello-goal] 检测到 API 错误 (" + api_info + ")。"
-            "/goal 任务自动恢复，继续执行。"
-        )
-
-    # Phase 2: 行为信号 + LLM 语义分析 —— 统一混合判定
+    # Phase 3: 行为信号 + LLM 语义分析 —— 统一混合判定
     score, flags = _structural_score(transcript_path)
 
     if score < PASS_THRESHOLD:
