@@ -38,6 +38,8 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 ANTHROPIC_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
 LLM_TIMEOUT = 8
 LLM_MODEL = "claude-3-5-haiku-20241022"
+HOOK_START_TIME = time.time()
+HOOK_BUDGET_SEC = 50  # 留 10 秒余量给 JSON 输出和进程清理
 
 # 信号权重（总和不超过 1.0）
 W_NO_TOOLS = 0.30        # 末轮无工具调用
@@ -75,11 +77,13 @@ def _read_stdin():
 
 def _block(reason):
     print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
+    sys.stdout.flush()
     sys.exit(0)
 
 
 def _pass(output=None):
     print(json.dumps(output or {}, ensure_ascii=False))
+    sys.stdout.flush()
     sys.exit(0)
 
 
@@ -646,6 +650,16 @@ def handle_stop(ctx):
         return _pass()
 
     # score ≥ PASS_THRESHOLD → 存在行为信号，交 LLM 语义分析最终裁决
+    # 时间预算保护：剩余时间不足 15 秒则跳过 LLM，保守 BLOCK
+    elapsed = time.time() - HOOK_START_TIME
+    if elapsed > HOOK_BUDGET_SEC:
+        flag_str = ", ".join(flags.keys()) if flags else "行为异常"
+        return _block(
+            "[hello-goal] 时间预算不足(已耗时" + str(int(elapsed)) + "s)，跳过语义分析，"
+            "保守策略：/goal 任务继续执行。"
+            " (行为信号: " + flag_str + ")"
+        )
+
     result = _llm_check(last_msg, stop_reason, flags)
 
     if result is True:
@@ -712,16 +726,21 @@ DISPATCH = {
 
 
 def main():
-    _setup_encoding()
     try:
+        _setup_encoding()
         ctx = _read_stdin()
         event = ctx.get("hook_event_name", "")
         handler = DISPATCH.get(event, lambda c: _pass())
         handler(ctx)
     except Exception:
-        _block(
-            "[hello-goal] 内部异常，保守策略：/goal 任务继续执行。"
-        )
+        # 兜底——任何未预期的异常也输出有效 JSON，避免 hook 系统解析失败
+        try:
+            _block(
+                "[hello-goal] 内部异常，保守策略：/goal 任务继续执行。"
+            )
+        except Exception:
+            print('{"decision":"block","reason":"hello-goal critical failure"}')
+            sys.stdout.flush()
 
 
 if __name__ == "__main__":
