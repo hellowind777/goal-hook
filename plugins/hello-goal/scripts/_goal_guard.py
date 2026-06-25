@@ -75,15 +75,26 @@ def _read_stdin():
         return {}
 
 
-def _block(reason):
-    print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
+def _write_json(data):
+    """输出 JSON 到 stdout——绕过 Windows 控制台编码问题。
+    直接写 UTF-8 字节到 buffer，避免 GBK/cp936 编码损坏中文导致
+    Claude Code hook 系统 JSON 校验失败。"""
+    payload = json.dumps(data, ensure_ascii=False)
+    try:
+        sys.stdout.buffer.write(payload.encode("utf-8") + b"\n")
+    except Exception:
+        # buffer 不可用时回退到 print（ASCII-safe fallback）
+        print(json.dumps(data, ensure_ascii=True))
     sys.stdout.flush()
+
+
+def _block(reason):
+    _write_json({"decision": "block", "reason": reason})
     sys.exit(0)
 
 
 def _pass(output=None):
-    print(json.dumps(output or {}, ensure_ascii=False))
-    sys.stdout.flush()
+    _write_json(output or {})
     sys.exit(0)
 
 
@@ -735,12 +746,9 @@ def main():
     except Exception:
         # 兜底——任何未预期的异常也输出有效 JSON，避免 hook 系统解析失败
         try:
-            _block(
-                "[hello-goal] 内部异常，保守策略：/goal 任务继续执行。"
-            )
+            _block("[hello-goal] internal error, blocking to continue /goal task.")
         except Exception:
-            print('{"decision":"block","reason":"hello-goal critical failure"}')
-            sys.stdout.flush()
+            _write_json({"decision": "block", "reason": "hello-goal critical failure"})
 
 
 if __name__ == "__main__":
