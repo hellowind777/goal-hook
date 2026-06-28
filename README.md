@@ -2,11 +2,11 @@
   <img src="./readme_images/01-hero-banner.svg" alt="hello-goal" width="800">
 </div>
 
-# hello-goal v2.3.1
+# hello-goal v2.3.3
 
-Global API Recovery + Hybrid Guardian for Claude Code `/goal` tasks. API errors (socket disconnect, 429, 502, 503) auto-recover regardless of `/goal` mode. In `/goal` mode, additionally prevents premature termination via behavioral structure analysis + LLM semantic analysis. Language-agnostic. Zero external dependencies. Pure Python standard library.
+Global API Recovery + Hybrid Guardian for Claude Code `/goal` tasks. API errors (socket disconnect, 429, 502, 503) auto-recover regardless of `/goal` mode. All hook stdout JSON is hardcoded — LLM semantic analysis only affects internal decision branches, never touches stdout. Language-agnostic. Zero external dependencies. Pure Python standard library.
 
-[![Version](https://img.shields.io/badge/version-2.3.1-orange.svg)](./RELEASE_NOTES.md)
+[![Version](https://img.shields.io/badge/version-2.3.3-orange.svg)](./RELEASE_NOTES.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 [![LINUX DO](https://img.shields.io/badge/LINUX_DO-recognized-0A84FF?logo=linux&logoColor=white)](https://linux.do)
 
@@ -40,22 +40,38 @@ Claude Code's `/goal` has three typical failure modes in long-running tasks:
 2. **Abandonment** — the model wants to quit early due to fatigue, long context, or loss of confidence
 3. **Standard downgrade** — the model silently lowers completion criteria ("good enough", "mostly done")
 
-Additionally, **API errors** (socket disconnections from third-party LLM providers, 429/502/503) can kill ANY task — `/goal` or not. hello-goal v2.3.1 catches these globally, before any other check, and auto-recovers.
+Additionally, **API errors** (socket disconnections from third-party LLM providers, 429/502/503) can kill ANY task — `/goal` or not. hello-goal catches these globally, before any other check, and auto-recovers.
 
-**hello-goal v2.3.1** uses a single command-type Stop hook with 4-phase cascaded analysis to detect and block premature terminations. All BLOCK reasons are minimal (`"继续"`) to avoid distracting the AI assistant during recovery.
+**hello-goal v2.3.3** uses a single command-type Stop hook with 4-phase cascaded analysis to detect and block premature terminations. All stdout output is **hardcoded valid JSON** (`print()` through `sys.stdout`) — the LLM semantic analysis only determines which internal branch to take, never directly or indirectly touches hook stdout. This architecture eliminates "JSON validation failed" errors from LLM-generated output.
+
+### Design Principle: Hardcoded JSON Output
+
+```
+LLM semantic analysis → True / False / None (internal decision only)
+                            ↓
+    _block("继续")              or          _pass()
+                            ↓
+    print('{"decision":"block","reason":"继续"}')  or  print('{}')
+                            ↓
+          ↑ Hardcoded JSON — never LLM-generated ↑
+```
+
+Unlike CC's native `/goal` evaluator (which may output non-JSON text when using third-party LLMs like DeepSeek), hello-goal's hook stdout is always deterministic, code-written JSON. The LLM response text from `_llm_check()` is parsed internally with `startswith("BLOCK")` / `startswith("PASS")` and never reaches stdout.
 
 ### v2.3 vs v2.2
 
 | | v2.2 | v2.3 |
 |---|---|---|
-| JSON I/O | `sys.stdout.buffer.write()` + `sys.stdout.flush()` | `os.write(fd=1)` — direct fd write, bypasses Windows encoding layer entirely |
-| stderr | Uncontrolled — Python warnings could pollute hook output | Redirected to `os.devnull` at startup |
-| Process exit | `sys.exit(0)` — may trigger atexit callbacks | `os._exit(0)` — immediate, zero post-output |
+| JSON output | `sys.stdout.buffer.write()` + `sys.stdout.flush()` | `print(json.dumps(...))` through `sys.stdout` — CC captures reliably |
+| Output principle | Verbose reason strings as hook feedback | Hardcoded JSON — LLM output never reaches stdout |
+| Encoding | `sys.stdout.reconfigure(encoding="utf-8")` | Same — restored at startup via `_setup_encoding()` |
+| Process exit | `sys.exit(0)` | `sys.exit(0)` |
 | API defaults | Hardcoded `api.anthropic.com` + `claude-3-5-haiku` | No hardcoded defaults — reads from CC env vars only |
 | API key env | `ANTHROPIC_API_KEY` only | Also reads `ANTHROPIC_AUTH_TOKEN` |
 | stdin errors | Catches `JSONDecodeError` + `IOError` | Catches all `Exception` (incl. `UnicodeDecodeError`) |
 | BLOCK reason | Verbose diagnostic strings (~80 chars) | `"继续"` — 2 characters, minimal |
-| JSON fallback | 1 layer | 3 layers: `os.write(1)` → `sys.stdout.buffer` → `print(ascii)` |
+| Hook timeout | 60s | 30s |
+| Native evaluator coexistence | Concurrent, may conflict | Concurrent — hardcoded JSON ensures independent validation |
 
 ### v2.2 vs v2.1
 
@@ -76,7 +92,7 @@ Additionally, **API errors** (socket disconnections from third-party LLM provide
 
 ## The Problem It Solves
 
-| Scenario | Without hello-goal | With hello-goal v2.3.1 |
+| Scenario | Without hello-goal | With hello-goal v2.3.3 |
 |----------|-------------------|---------------------|
 | API error (socket/429/503) in any session | Task permanently interrupted | Phase 0 detects → auto-recover BLOCK |
 | `/goal` hook error mid-task | Session terminates | Detects abnormal stop_reason → BLOCK |
@@ -120,11 +136,13 @@ Stop Hook fires
 
 All BLOCK decisions return reason `"继续"` — minimal, non-distracting feedback to the AI assistant.
 
+All stdout output uses `print()` through `sys.stdout`. The LLM semantic analysis result only determines which branch is taken — the final JSON is always hardcoded in code.
+
 ### Why not keywords/regex
 
 There are 200+ languages. A model can express "I give up" in any of them. Keyword regex is neither exhaustive nor maintainable.
 
-v2.3.1's behavioral analysis **doesn't read text content** — it scores tool call patterns, message length trends, and turn structure from the transcript. These signals are identical in every language. The LLM semantic analysis provides the final decision on all suspicious turns, handling any language natively.
+v2.3.3's behavioral analysis **doesn't read text content** — it scores tool call patterns, message length trends, and turn structure from the transcript. These signals are identical in every language. The LLM semantic analysis provides the final decision on all suspicious turns, handling any language natively.
 
 ## Quick Start
 
@@ -201,11 +219,11 @@ Claude Code v2.1.143+ enforces a maximum of 8 consecutive Stop hook blocks. Rais
 
 ```
 hooks/hooks.json
-├── Stop (command, 60s)          ← Core guardian: 4-phase cascaded analysis
+├── Stop (command, 30s)          ← Core guardian: 4-phase cascaded analysis
 ├── SessionStart (command, 5s)   ← Stale state cleanup, session init
 └── PostCompact (command, 3s)    ← Post-compaction detection cache refresh
 
-scripts/_goal_guard.py (~750 lines, zero dependencies)
+scripts/_goal_guard.py (~730 lines, zero dependencies)
 ├── handle_stop()           ← Phase 0-3 main logic
 ├── handle_session_start()  ← State cleanup
 ├── handle_post_compact()   ← Cache refresh with sticky goal_detected
@@ -221,7 +239,7 @@ scripts/_goal_guard.py (~750 lines, zero dependencies)
 |------|---------|
 | `plugins/hello-goal/hooks/hooks.json` | Three-hook registration (Stop + SessionStart + PostCompact) |
 | `plugins/hello-goal/scripts/_goal_guard.py` | Hybrid guardian main script |
-| `plugins/hello-goal/.claude-plugin/plugin.json` | Plugin metadata (v2.3.1) |
+| `plugins/hello-goal/.claude-plugin/plugin.json` | Plugin metadata (v2.3.3) |
 | `.claude-plugin/marketplace.json` | Marketplace manifest |
 | `setup.py` | One-click cross-platform installer |
 
@@ -236,19 +254,19 @@ scripts/_goal_guard.py (~750 lines, zero dependencies)
 <details>
 <summary><strong>Q: Do I need to modify my GOAL_PROMPT?</strong></summary>
 
-**A:** No. v2.3.1 auto-detects `/goal` state from CC native markers in the transcript. It does not depend on any status file written by your prompt.
+**A:** No. v2.3.3 auto-detects `/goal` state from CC native markers in the transcript. It does not depend on any status file written by your prompt.
 </details>
 
 <details>
 <summary><strong>Q: How much does the LLM analysis cost?</strong></summary>
 
-**A:** All turns with any behavioral signal (score ≥ 0.20) trigger LLM analysis. Each lightweight model call is ~$0.0005. A 200-turn `/goal` task with behavioral signals on every turn costs about $0.10 total. Turns without signals (score < 0.20) pass instantly with zero LLM cost.
+**A:** All turns with any behavioral signal (score ≥ 0.20) trigger LLM analysis. Each lightweight model call costs approximately $0.0005. A 200-turn `/goal` task with behavioral signals on every turn costs about $0.10 total. Turns without signals (score < 0.20) pass instantly with zero LLM cost.
 </details>
 
 <details>
-<summary><strong>Q: Does this conflict with the native /goal evaluator?</strong></summary>
+<summary><strong>Q: Does this conflict with CC's native /goal evaluator?</strong></summary>
 
-**A:** No. Both run in parallel — any single BLOCK prevents the stop. This plugin uses a command hook with independent judgment, not dependent on the native prompt hook.
+**A:** Both run in parallel as separate stop hooks. hello-goal v2.3.3 uses `print()` through `sys.stdout` to ensure CC captures its hardcoded JSON output independently. When the native evaluator produces non-JSON text (common with third-party LLMs like DeepSeek), hello-goal's JSON output remains valid and independently verifiable. However, CC's internal hook batch processing means a JSON validation error from the native evaluator may still affect the batch as a whole — this is a CC-level architecture limitation.
 </details>
 
 <details>
@@ -260,7 +278,7 @@ scripts/_goal_guard.py (~750 lines, zero dependencies)
 <details>
 <summary><strong>Q: What if the plugin itself hits an unexpected error?</strong></summary>
 
-**A:** The main handler is wrapped in a global exception guard with 3-layer fallback (`os.write(1)` → `sys.stdout.buffer` → `print(ascii)`). Any unexpected internal error outputs a valid BLOCK decision — keeping the task running safely rather than crashing with a "JSON validation failed" error.
+**A:** The main handler is wrapped in a global exception guard. Any unexpected internal error outputs a hardcoded BLOCK decision via `print()` — keeping the task running safely rather than crashing with a "JSON validation failed" error.
 </details>
 
 ## License

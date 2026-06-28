@@ -1,20 +1,15 @@
 #!/usr/bin/env python3
-"""hello-goal v2.3.1 — Global API Recovery + Hybrid /goal Guardian.[JSON输出加固: os.write(fd=1) 彻底绕过 Windows I/O 编码层 + reason精简]
-"""
+"""hello-goal v2.3.3 — Global API Recovery + Hybrid /goal Guardian.
 
-# ---- 环境初始化 ----
-# 必须在任何可能输出到 stderr/stdout 的操作之前完成
+硬编码 JSON 输出 —— 最终 stdout 输出永远是代码写死的合法 JSON，
+LLM 语义分析只影响内部决策分支，绝不直接或间接出现在 hook 的 stdout 上。
+使用 print() 走 sys.stdout 通道，确保 CC 能 100% 捕获。
+"""
 import json
 import os
 import re
 import sys
 import time
-
-# 抑制 stderr：重定向到 NUL，防止 Python 警告/错误污染 hook 系统的 JSON 解析
-try:
-    sys.stderr = open(os.devnull, "w")
-except Exception:
-    pass
 
 # ============================================================
 # 配置
@@ -37,7 +32,7 @@ LLM_TIMEOUT = 8
 # —— 不同 API 提供商模型名不同（DeepSeek / Anthropic / 其他），留空则降级为保守 BLOCK
 LLM_MODEL = os.environ.get("ANTHROPIC_DEFAULT_HAIKU_MODEL", "")
 HOOK_START_TIME = time.time()
-HOOK_BUDGET_SEC = 50  # 留 10 秒余量给 JSON 输出和进程清理
+HOOK_BUDGET_SEC = 25  # 留 5 秒余量给 JSON 输出和进程清理（hooks.json timeout=30s）
 
 # 信号权重（总和不超过 1.0）
 W_NO_TOOLS = 0.30        # 末轮无工具调用
@@ -77,34 +72,29 @@ def _read_stdin():
 
 
 # ---- 核心 I/O ----
+# 所有 stdout 输出均为硬编码的合法 JSON —— LLM 语义分析只影响内部决策分支，
+# 最终输出的 JSON 字符串由代码写死，绝不经过 LLM 生成，从根本消除 JSON 校验失败风险。
 
-def _write_json(data):
-    """通过 os.write(fd=1) 直接向 stdout 文件描述符写入 UTF-8 JSON 行。
-    完全绕过 Python 的 sys.stdout / sys.stdout.buffer —— 消除 Windows 上
-    TextIOWrapper 编码层与 buffer 之间潜在的缓冲不同步问题，确保 CC hook
-    系统始终收到纯净的、单行的合法 JSON。"""
-    payload = json.dumps(data, ensure_ascii=False)
-    raw = payload.encode("utf-8") + b"\n"
-    try:
-        os.write(1, raw)
-    except Exception:
-        # fd=1 不可用时回退（极罕见，如 stdin/stdout 被关闭的守护进程）
+
+def _setup_encoding():
+    """尝试将 sys.stdout/stderr 配置为 UTF-8，失败不阻塞。"""
+    for stream in (sys.stdout, sys.stderr):
         try:
-            sys.stdout.buffer.write(raw)
-            sys.stdout.flush()
+            stream.reconfigure(encoding="utf-8", errors="replace")
         except Exception:
-            # 最后兜底：ASCII-safe print
-            print(json.dumps(data, ensure_ascii=True))
+            pass
 
 
 def _block(reason):
-    _write_json({"decision": "block", "reason": reason})
-    os._exit(0)
+    """阻止 CC 退出，任务继续。输出硬编码 JSON —— 绝不依赖 LLM 生成。"""
+    print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
+    sys.exit(0)
 
 
 def _pass(output=None):
-    _write_json(output or {})
-    os._exit(0)
+    """放行，不干预 CC。输出空 JSON 对象 —— 最简格式，最大兼容性。"""
+    print(json.dumps(output or {}, ensure_ascii=False))
+    sys.exit(0)
 
 
 # ============================================================
@@ -726,21 +716,17 @@ DISPATCH = {
 
 def main():
     try:
+        _setup_encoding()
         ctx = _read_stdin()
         event = ctx.get("hook_event_name", "")
         handler = DISPATCH.get(event, lambda c: _pass())
         handler(ctx)
     except Exception:
+        # 任何未预期异常 → 保守 BLOCK，确保 /goal 任务不丢失
         try:
-            # 兜底: 任何未预期异常也输出合法 JSON，避免 hook 系统解析失败
             _block("继续")
         except Exception:
-            # 最底层兜底: 直接写 fd=1，确保至少有一行 JSON
-            try:
-                os.write(1, b'{"decision":"block","reason":"hello-goal critical"}\n')
-            except Exception:
-                pass
-            os._exit(0)
+            sys.exit(0)
 
 
 if __name__ == "__main__":

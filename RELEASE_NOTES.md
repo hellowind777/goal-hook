@@ -1,5 +1,65 @@
 # Release Notes / 发布记录
 
+## v2.3.3 (2026-06-28)
+
+### JSON 输出回退 print() 通道 + 硬编码原则 —— 修复与 CC 原生评估器 JSON 校验冲突
+
+对比 v2.3.1 的实质性变更：
+
+**JSON 输出 I/O 层回退（修复绕过 sys.stdout 导致 CC 捕获失败）：**
+
+- `_write_json()` 函数及其三层兜底（`os.write(fd=1)` → `sys.stdout.buffer` → `print(ascii)`）被移除。恢复为直接 `print(json.dumps(...))` 输出，走 `sys.stdout` 标准通道。v2.3.1 引入的 `os.write(fd=1)` 直接写文件描述符 1，绕过了 CC hook 系统监控的 `sys.stdout` 层，当 CC 原生 /goal 评估器同时产生非 JSON 文本输出（使用 DeepSeek 等第三方大模型时常见）时，CC 无法在 `sys.stdout` 层获取 hello-goal 的输出，两个 hook 的输出在同一批次中均告失败。
+- `_setup_encoding()` 恢复：启动时将 `sys.stdout` / `sys.stderr` 配置为 UTF-8。v2.3.1 移除了此函数并用 `stderr → os.devnull` 替代，导致 `print()` 在 Windows 上可能因 cp936/GBK 编码无法输出中文 reason。当前方案直接配置正确的编码而非抑制 stderr。
+- 进程退出方式从 `os._exit(0)` 恢复为 `sys.exit(0)`。`sys.exit()` 提供正常的 Python 清理流程，确保 `print()` 的输出缓冲区完全刷新后进程才退出。
+
+**硬编码 JSON 输出原则：**
+
+- 所有 hook stdout 输出由代码写死：`print('{"decision":"block","reason":"继续"}')` 或 `print('{}')`。LLM 语义分析（`_llm_check()`）的返回值仅用于选择走哪个内部分支，LLM 响应的文本绝不直接或间接触及 hook stdout。此架构从根本上消除了"LLM 生成非 JSON 文本导致 hook JSON 校验失败"的风险——这是 CC 原生 /goal 评估器在使用第三方大模型时的常见失败模式。
+- 移除 `_write_json()` 中间层。`_block(reason)` 和 `_pass()` 直接调用 `print()` + `sys.exit(0)`，与 v1.0.5 原始设计一致。
+
+**守护配置调优：**
+
+- `hooks.json` Stop hook timeout 从 60s 降为 30s。移除 `os.write()` 三层兜底后 hook 运行更快，30s 仍为 LLM API 调用（8s timeout）保留充足余量。
+- `HOOK_BUDGET_SEC` 从 50s 降为 25s，与新 timeout 匹配。
+- `main()` 异常兜底从三层（`_block()` → `os.write(1, raw)` → pass）精简为单层（`_block()` → `sys.exit(0)`）。外部兜底程序不再直接操作文件描述符。
+
+**版本号同步：**
+
+- `_goal_guard.py` 模块文档版本号 2.3.1 → 2.3.3
+- `plugin.json` 版本号 2.3.1 → 2.3.3
+- `marketplace.json` 版本号 2.3.1 → 2.3.3
+
+---
+
+### JSON Output Reverted to print() Channel + Hardcoded Principle — Fix CC Native Evaluator JSON Validation Conflict
+
+Substantive changes compared to v2.3.1:
+
+**JSON I/O layer reverted (fix bypassing sys.stdout causing CC capture failure):**
+
+- `_write_json()` function and its three-layer fallback (`os.write(fd=1)` → `sys.stdout.buffer` → `print(ascii)`) removed. Reverted to direct `print(json.dumps(...))` output through the `sys.stdout` standard channel. The `os.write(fd=1)` approach introduced in v2.3.1 wrote directly to file descriptor 1, bypassing the `sys.stdout` layer that CC's hook system monitors. When CC's native /goal evaluator simultaneously produced non-JSON text output (common with third-party LLMs like DeepSeek), CC could not retrieve hello-goal's output at the `sys.stdout` layer, causing both hooks in the batch to fail.
+- `_setup_encoding()` restored: reconfigures `sys.stdout` / `sys.stderr` to UTF-8 at startup. v2.3.1 removed this function and replaced it with `stderr → os.devnull`, which caused `print()` to fail on Windows when outputting Chinese characters due to cp936/GBK encoding. The current approach directly configures correct encoding rather than suppressing stderr.
+- Process exit reverted from `os._exit(0)` to `sys.exit(0)`. `sys.exit()` provides normal Python cleanup, ensuring `print()` output buffers are fully flushed before the process exits.
+
+**Hardcoded JSON output principle:**
+
+- All hook stdout output is code-written: `print('{"decision":"block","reason":"continue"}')` or `print('{}')`. The LLM semantic analysis (`_llm_check()`) return value only selects which internal branch to take — LLM response text never directly or indirectly touches hook stdout. This architecture fundamentally eliminates the risk of "LLM generates non-JSON text causing hook JSON validation failure" — the common failure mode of CC's native /goal evaluator when using third-party LLMs.
+- Removed `_write_json()` intermediate layer. `_block(reason)` and `_pass()` directly call `print()` + `sys.exit(0)`, consistent with the v1.0.5 original design.
+
+**Guard configuration tuning:**
+
+- `hooks.json` Stop hook timeout reduced from 60s to 30s. Hook execution is faster without the three-layer `os.write()` fallback; 30s still provides ample headroom for the LLM API call (8s timeout).
+- `HOOK_BUDGET_SEC` reduced from 50s to 25s, matching the new timeout.
+- `main()` exception guard simplified from three layers (`_block()` → `os.write(1, raw)` → pass) to a single layer (`_block()` → `sys.exit(0)`). The outer fallback no longer directly manipulates file descriptors.
+
+**Version sync:**
+
+- `_goal_guard.py` module docstring version 2.3.1 → 2.3.3
+- `plugin.json` version 2.3.1 → 2.3.3
+- `marketplace.json` version 2.3.1 → 2.3.3
+
+---
+
 ## v2.3.1 (2026-06-27)
 
 ### JSON 输出加固 + reason 精简 + DeepSeek 兼容 —— Windows I/O 层重构与多 API 提供商适配
@@ -41,8 +101,6 @@
 - `_goal_guard.py` 模块文档版本号 2.2.0 → 2.3.1
 - `plugin.json` 版本号 2.2.0 → 2.3.1
 - `marketplace.json` 版本号 2.2.0 → 2.3.1
-- `README.md` / `README_CN.md` 版本号 2.2.0 → 2.3.1
-- `01-hero-banner.svg` / `architecture.svg` 版本号 2.2.0 → 2.3.1
 
 ---
 
@@ -85,8 +143,6 @@ Substantive changes compared to v2.2.0:
 - `_goal_guard.py` module docstring version 2.2.0 → 2.3.1
 - `plugin.json` version 2.2.0 → 2.3.1
 - `marketplace.json` version 2.2.0 → 2.3.1
-- `README.md` / `README_CN.md` version 2.2.0 → 2.3.1
-- `01-hero-banner.svg` / `architecture.svg` version 2.2.0 → 2.3.1
 
 ---
 
@@ -169,7 +225,7 @@ Substantive changes compared to v2.1.2:
 
 ---
 
-### Stop Hook Global Exception Guard —— Eliminate JSON Validation Failures Breaking /goal Loops
+### Stop Hook Global Exception Guard — Eliminate JSON Validation Failures Breaking /goal Loops
 
 Substantive changes compared to v2.1.1:
 
