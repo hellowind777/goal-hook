@@ -747,18 +747,16 @@ def _detect_api_error(ctx):
         return True, "assistant 消息匹配 " + pat
 
     # 源 4: last_assistant_message 为空且 stop_reason 为 end_turn
-    # 这是 CC 直接显示 API 错误的典型特征 —— 错误直接展示在 UI，不经过
-    # assistant 消息通道。end_turn + 空消息在正常对话中不会出现：
-    #   - 正常结束: assistant 总是有文本内容
-    #   - tool_use: stop_reason 设为 "tool_use"（源1不会拦截，源4以end_turn限定避开）
-    #   - max_tokens: 至少会返回部分文本再截断
-    # 非 end_turn 的异常 stop_reason 已在源1拦截，此处仅覆盖 sr=end_turn 的漏网场景
-    if not last_msg and sr == "end_turn":
-        return True, "assistant 消息为空 + end_turn（CC 直接报错）"
+    # 这可能是 CC 直接显示 API 错误的场景，也可能是 CC 的正常空消息轮次。
+    # 为避免误判：不直接 BLOCK，而是触发增强 transcript 扫描（源 5 扩容到 100 条）。
+    # 如果源 5 找到错误证据 → BLOCK；否则 → PASS（非 API 错误）。
+    _suspicious_empty_msg = bool(not last_msg and sr == "end_turn")
 
-    # 源 5: transcript 尾部深度扫描（50 条记录，含所有文本字段）
+    # 源 5: transcript 尾部深度扫描
+    # 正常情况下扫描 50 条；空消息 + end_turn 疑似 CC 报错时扩容到 100 条
     transcript_path = ctx.get("transcript_path", "")
-    entries = _read_transcript_tail(transcript_path, num_entries=50)
+    _scan_depth = 100 if _suspicious_empty_msg else 50
+    entries = _read_transcript_tail(transcript_path, num_entries=_scan_depth)
     for entry in entries:
         etype = entry.get("type", "")
         msg = entry.get("message", {})
@@ -797,6 +795,23 @@ def _detect_api_error(ctx):
                             pat = _match_api_error(t)
                             if pat:
                                 return True, f"transcript user 匹配 " + pat
+
+    # 源 4 (兜底): 空消息 + end_turn 且上述所有源均未检出错误
+    # 首次触发 → BLOCK（可能是 CC 直接报错，错误未进入 transcript）
+    # 60s 内重复触发且 transcript 始终干净 → PASS（大概率是 CC 正常空消息轮次）
+    if _suspicious_empty_msg:
+        state = _load_state()
+        ss = state.get(session_id, {})
+        last_empty_blk = ss.get("empty_msg_blocked_at", 0)
+        now_ts = time.time()
+        if last_empty_blk and (now_ts - last_empty_blk) < 60:
+            # 60s 内已因空消息 BLOCK 过一次，transcript 仍无错误 → 正常轮次
+            return False, ""
+        else:
+            ss["empty_msg_blocked_at"] = now_ts
+            state[session_id] = ss
+            _save_state(state)
+            return True, "空消息 + end_turn（CC 直接报错兜底，60s 内不再重复）"
 
     return False, ""
 
