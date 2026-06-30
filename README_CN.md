@@ -2,11 +2,11 @@
   <img src="./readme_images/01-hero-banner.svg" alt="hello-goal" width="800">
 </div>
 
-# hello-goal v2.3.5
+# hello-goal v2.3.6
 
-全局 API 恢复 + 混合守护插件。API 错误（socket 断开、429、502、503）无论是否 /goal 模式均自动恢复。所有 hook stdout 输出均为硬编码合法 JSON —— LLM 语义分析仅影响内部决策分支，绝不触及 stdout。语言无关，零外部依赖。纯 Python 标准库。
+全类型 API 错误恢复 + 混合守护插件。任何第三方大模型故障（连接/HTTP/限流/过载/认证/模型不存在/内部错误）无论是否 /goal 模式均自动恢复。DeepSeek V4 thinking mode 兼容。所有 hook stdout 输出均为硬编码合法 JSON —— LLM 语义分析仅影响内部决策分支，绝不触及 stdout。语言无关，零外部依赖。纯 Python 标准库。
 
-[![Version](https://img.shields.io/badge/version-2.3.5-orange.svg)](./RELEASE_NOTES.md)
+[![Version](https://img.shields.io/badge/version-2.3.6-orange.svg)](./RELEASE_NOTES.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 [![LINUX DO](https://img.shields.io/badge/LINUX_DO-recognized-0A84FF?logo=linux&logoColor=white)](https://linux.do)
 
@@ -40,9 +40,9 @@ Claude Code 的 `/goal` 功能在长任务中有三类典型失败模式：
 2. **主动放弃** —— 模型因疲劳、上下文过长、信心丧失而提前想结束
 3. **标准降级** —— 模型悄悄降低完成标准（"差不多了"、"基本可以了"）
 
-此外，**API 错误**（第三方大模型 socket 断开、429/502/503）会中断**任何**任务——无论是否 /goal 模式。hello-goal 在全局 Phase 0 优先拦截，自动恢复。
+此外，**API 错误**（第三方大模型 socket 断开、HTTP 429/502/503/500/403、限流配额、服务过载、认证失败、模型不存在、DeepSeek V4 thinking mode 400 等）会中断**任何**任务——无论是否 /goal 模式。hello-goal 在全局 Phase 0 优先拦截，自动恢复。
 
-**hello-goal v2.3.3** 以单一 command-type Stop hook 实现四层级联守护。所有 stdout 输出均为**硬编码合法 JSON**（`print()` 走 `sys.stdout` 通道）—— LLM 语义分析仅决定走哪个内部分支，绝不直接或间接触及 hook stdout。此架构从根因消除因 LLM 生 JSON 导致的 "JSON validation failed" 错误。
+**hello-goal v2.3.6** 以单一 command-type Stop hook 实现四层级联守护。API 错误检测覆盖 **~85 种模式 / 9 大类别**（连接层、HTTP 状态码、限流配额、服务过载、认证鉴权、模型引擎、内部故障、DeepSeek 专属、通用故障）。LLM 语义分析自动适配 DeepSeek V4 thinking mode（`thinking: disabled` 确保 clean text 输出）。API 不可用状态缓存（120 秒 TTL）避免重复调用已死的 API。
 
 ### 设计原则：硬编码 JSON 输出
 
@@ -92,9 +92,9 @@ LLM 语义分析 → True / False / None（纯内部决策）
 
 ## 解决了什么问题
 
-| 场景 | 无 hello-goal | 有 hello-goal v2.3.5 |
+| 场景 | 无 hello-goal | 有 hello-goal v2.3.6 |
 |------|-------------|------------------|
-| 任意会话 API 错误（socket/429/503） | 任务永久中断 | Phase 0 检测 → 自动恢复 BLOCK |
+| 任意会话 API 错误（~85 种模式/9 类） | 任务永久中断 | Phase 0 检测 → 自动恢复 BLOCK |
 | `/goal` 中 hook 报错中断 | 会话终止 | 检测 stop_reason 异常 → BLOCK 继续 |
 | 模型疲劳想放弃 | 原生评估器放行 | 行为信号 + LLM 语义确认 → BLOCK |
 | 模型降级完成标准 | 低质量"完成" | 行为信号触发 LLM 分析 → BLOCK |
@@ -106,9 +106,10 @@ LLM 语义分析 → True / False / None（纯内部决策）
 ```
 Stop Hook 触发
   │
-  ├─ Phase 0 (全局): API 错误检测
-  │   ├─ 匹配 11 种模式: socket close, 429/503/502/504, rate limit, timeout...
-  │   ├─ 来源: stop_reason, assistant 消息, transcript 尾部
+  ├─ Phase 0 (全局): 全类型 API 错误检测
+  │   ├─ 匹配 ~85 种模式 / 9 大类别: 连接层, HTTP状态码, 限流, 过载, 认证...
+  │   ├─ DeepSeek V4 专属: thinking mode 兼容, reasoning_content, 网关错误
+  │   ├─ 来源: stop_reason, assistant 消息, transcript 尾部, API 可用性缓存
   │   └─ 检测到 API 错误 → BLOCK（自动恢复，无论是否 /goal 模式）
   │
   ├─ Phase 1: /goal 检测（CC 原生标记 + 用户命令 + 缓存优先）
@@ -224,14 +225,16 @@ hooks/hooks.json
 ├── SessionStart (command, 5s)   ← 清理过期状态，初始化会话
 └── PostCompact (command, 3s)    ← 压缩后刷新检测缓存
 
-scripts/_goal_guard.py (~730 行, 零依赖)
+scripts/_goal_guard.py (~880 行, 零依赖)
 ├── handle_stop()           ← Phase 0-3 主逻辑
 ├── handle_session_start()  ← 状态清理
 ├── handle_post_compact()   ← 缓存刷新（保留 goal_detected 粘性先验）
 ├── _detect_goal_active()   ← 三级 /goal 检测（原生标记 + 命令 + summary）
 ├── _structural_score()     ← 行为结构信号加权（4 信号）
-├── _detect_api_error()     ← API 错误模式匹配（11 种模式，3 来源）
-└── _llm_check()            ← LLM 语义分析（含行为上下文，urllib）
+├── _detect_api_error()     ← API 错误多源检测（~85 模式/9 类 + 状态缓存）
+├── _llm_check()            ← LLM 语义分析（含行为上下文，urllib，DeepSeek V4 适配）
+├── _is_api_available()     ← API 可达性检查（120 秒缓存）
+└── _mark_api_unavailable() ← API 不可用状态标记
 
 scripts/_goal_failure.py (6 行, 零依赖)
 └── StopFailure 兜底        ← 任何 hook 失败时无条件 BLOCK
@@ -244,7 +247,7 @@ scripts/_goal_failure.py (6 行, 零依赖)
 | `plugins/hello-goal/hooks/hooks.json` | 四钩子注册（Stop + StopFailure + SessionStart + PostCompact） |
 | `plugins/hello-goal/scripts/_goal_guard.py` | 混合守护主脚本（全功能分析） |
 | `plugins/hello-goal/scripts/_goal_failure.py` | StopFailure 安全网（6 行，无条件 BLOCK） |
-| `plugins/hello-goal/.claude-plugin/plugin.json` | 插件元数据（v2.3.5） |
+| `plugins/hello-goal/.claude-plugin/plugin.json` | 插件元数据（v2.3.6） |
 | `.claude-plugin/marketplace.json` | 市场清单 |
 | `setup.py` | 一键跨平台安装脚本 |
 
@@ -271,7 +274,13 @@ scripts/_goal_failure.py (6 行, 零依赖)
 <details>
 <summary><strong>Q: 和原生 /goal 内置 hook 冲突吗？</strong></summary>
 
-**A:** 两者作为独立的 stop hook 并行运行。当原生评估器输出非 JSON 文本（使用 DeepSeek 等第三方大模型时常见）时，CC 会报告 "Stop hook error: JSON validation failed"。hello-goal v2.3.5 通过 **StopFailure 安全网** 解决此问题：一个独立的 6 行 hook 脚本，仅在 Stop hook 失败时触发，无条件返回 BLOCK 让任务继续。这确保原生评估器的 JSON 错误无法永久中断 /goal 任务。
+**A:** 两者作为独立的 stop hook 并行运行。当原生评估器输出非 JSON 文本（使用 DeepSeek 等第三方大模型时常见）时，CC 会报告 "Stop hook error: JSON validation failed"。hello-goal v2.3.6 通过 **StopFailure 安全网** 解决此问题：一个独立的 6 行 hook 脚本，仅在 Stop hook 失败时触发，无条件返回 BLOCK 让任务继续。这确保原生评估器的 JSON 错误无法永久中断 /goal 任务。
+</details>
+
+<details>
+<summary><strong>Q: DeepSeek V4 下 LLM 语义分析能正常工作吗？</strong></summary>
+
+**A:** 能。v2.3.6 解决了 DeepSeek V4 thinking mode 兼容性——语义分析请求自动注入 `thinking: {type: "disabled"}` 以直接获取 text 输出，避免 thinking 块消耗全部 token 导致无 text 响应。同时增加了 thinking 块回退提取机制作为额外保护。
 </details>
 
 <details>

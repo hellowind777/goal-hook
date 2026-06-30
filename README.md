@@ -2,11 +2,11 @@
   <img src="./readme_images/01-hero-banner.svg" alt="hello-goal" width="800">
 </div>
 
-# hello-goal v2.3.5
+# hello-goal v2.3.6
 
-Global API Recovery + Hybrid Guardian for Claude Code `/goal` tasks. API errors (socket disconnect, 429, 502, 503) auto-recover regardless of `/goal` mode. All hook stdout JSON is hardcoded — LLM semantic analysis only affects internal decision branches, never touches stdout. Language-agnostic. Zero external dependencies. Pure Python standard library.
+All-type API Error Recovery + Hybrid Guardian for Claude Code `/goal` tasks. Any third-party LLM failure (connection/HTTP/rate-limit/overload/auth/model-not-found/internal-error) auto-recovers regardless of `/goal` mode. DeepSeek V4 thinking mode compatible. All hook stdout JSON is hardcoded — LLM semantic analysis only affects internal decision branches, never touches stdout. Language-agnostic. Zero external dependencies. Pure Python standard library.
 
-[![Version](https://img.shields.io/badge/version-2.3.5-orange.svg)](./RELEASE_NOTES.md)
+[![Version](https://img.shields.io/badge/version-2.3.6-orange.svg)](./RELEASE_NOTES.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 [![LINUX DO](https://img.shields.io/badge/LINUX_DO-recognized-0A84FF?logo=linux&logoColor=white)](https://linux.do)
 
@@ -40,9 +40,9 @@ Claude Code's `/goal` has three typical failure modes in long-running tasks:
 2. **Abandonment** — the model wants to quit early due to fatigue, long context, or loss of confidence
 3. **Standard downgrade** — the model silently lowers completion criteria ("good enough", "mostly done")
 
-Additionally, **API errors** (socket disconnections from third-party LLM providers, 429/502/503) can kill ANY task — `/goal` or not. hello-goal catches these globally, before any other check, and auto-recovers.
+Additionally, **API errors** (socket disconnections from third-party LLM providers, HTTP 429/502/503/500/403, rate limiting, overload, auth failures, model not found, DeepSeek V4 thinking mode 400, etc.) can kill ANY task — `/goal` or not. hello-goal catches these globally, before any other check, and auto-recovers.
 
-**hello-goal v2.3.3** uses a single command-type Stop hook with 4-phase cascaded analysis to detect and block premature terminations. All stdout output is **hardcoded valid JSON** (`print()` through `sys.stdout`) — the LLM semantic analysis only determines which internal branch to take, never directly or indirectly touches hook stdout. This architecture eliminates "JSON validation failed" errors from LLM-generated output.
+**hello-goal v2.3.6** uses a single command-type Stop hook with 4-phase cascaded analysis. API error detection covers **~85 patterns across 9 categories** (connection, HTTP status, rate-limit/quota, overload, auth, model/engine, internal errors, DeepSeek-specific, generic failures). LLM semantic analysis auto-adapts to DeepSeek V4 thinking mode (`thinking: disabled` for clean text output). API unavailability state cache (120s TTL) avoids repeated calls to a dead API.
 
 ### Design Principle: Hardcoded JSON Output
 
@@ -92,9 +92,9 @@ Unlike CC's native `/goal` evaluator (which may output non-JSON text when using 
 
 ## The Problem It Solves
 
-| Scenario | Without hello-goal | With hello-goal v2.3.5 |
+| Scenario | Without hello-goal | With hello-goal v2.3.6 |
 |----------|-------------------|---------------------|
-| API error (socket/429/503) in any session | Task permanently interrupted | Phase 0 detects → auto-recover BLOCK |
+| API error (~85 patterns/9 categories) in any session | Task permanently interrupted | Phase 0 detects → auto-recover BLOCK |
 | `/goal` hook error mid-task | Session terminates | Detects abnormal stop_reason → BLOCK |
 | Model fatigue / wants to quit | Native evaluator passes | Structural signals + LLM confirm → BLOCK |
 | Model downgrades completion standard | Low-quality "done" | Structural analysis detects stall → BLOCK |
@@ -106,9 +106,10 @@ Unlike CC's native `/goal` evaluator (which may output non-JSON text when using 
 ```
 Stop Hook fires
   │
-  ├─ Phase 0 (Global): API Error Detection
-  │   ├─ Match 11 patterns: socket close, 429/503/502/504, rate limit, timeout...
-  │   ├─ Sources: stop_reason, assistant message, transcript tail
+  ├─ Phase 0 (Global): All-Type API Error Detection
+  │   ├─ Match ~85 patterns / 9 categories: connection, HTTP, rate-limit, overload...
+  │   ├─ DeepSeek V4 specific: thinking mode compat, reasoning_content, gateway errors
+  │   ├─ Sources: stop_reason, assistant msg, transcript tail, API availability cache
   │   └─ API error detected → BLOCK (auto-resume, regardless of /goal mode)
   │
   ├─ Phase 1: /goal Detection (CC native markers + user commands + cache-first)
@@ -224,14 +225,16 @@ hooks/hooks.json
 ├── SessionStart (command, 5s)   ← Stale state cleanup, session init
 └── PostCompact (command, 3s)    ← Post-compaction detection cache refresh
 
-scripts/_goal_guard.py (~730 lines, zero dependencies)
+scripts/_goal_guard.py (~880 lines, zero dependencies)
 ├── handle_stop()           ← Phase 0-3 main logic
 ├── handle_session_start()  ← State cleanup
 ├── handle_post_compact()   ← Cache refresh with sticky goal_detected
 ├── _detect_goal_active()   ← Three-tier /goal detection (markers + commands + summary)
 ├── _structural_score()     ← Behavioral signal weighting (4 signals)
-├── _detect_api_error()     ← API error pattern matching (11 patterns, 3 sources)
-└── _llm_check()            ← LLM semantic analysis with behavioral context (urllib)
+├── _detect_api_error()     ← API error multi-source detection (~85 patterns/9 cats + state cache)
+├── _llm_check()            ← LLM semantic analysis (urllib, DeepSeek V4 thinking=disabled)
+├── _is_api_available()     ← API reachability check (120s cache)
+└── _mark_api_unavailable() ← API unavailability state marker
 
 scripts/_goal_failure.py (6 lines, zero dependencies)
 └── StopFailure handler     ← Unconditional BLOCK on any hook failure
@@ -244,7 +247,7 @@ scripts/_goal_failure.py (6 lines, zero dependencies)
 | `plugins/hello-goal/hooks/hooks.json` | Four-hook registration (Stop + StopFailure + SessionStart + PostCompact) |
 | `plugins/hello-goal/scripts/_goal_guard.py` | Hybrid guardian main script (full analysis) |
 | `plugins/hello-goal/scripts/_goal_failure.py` | StopFailure safety net (6 lines, unconditional BLOCK) |
-| `plugins/hello-goal/.claude-plugin/plugin.json` | Plugin metadata (v2.3.5) |
+| `plugins/hello-goal/.claude-plugin/plugin.json` | Plugin metadata (v2.3.6) |
 | `.claude-plugin/marketplace.json` | Marketplace manifest |
 | `setup.py` | One-click cross-platform installer |
 
@@ -271,7 +274,13 @@ scripts/_goal_failure.py (6 lines, zero dependencies)
 <details>
 <summary><strong>Q: Does this conflict with CC's native /goal evaluator?</strong></summary>
 
-**A:** Both run in parallel as separate stop hooks. When the native evaluator produces non-JSON text (common with third-party LLMs like DeepSeek), CC reports "Stop hook error: JSON validation failed". hello-goal v2.3.5 addresses this with a **StopFailure safety net**: a separate 6-line hook script that fires only when any Stop hook fails, unconditionally returning BLOCK to keep the task running. This ensures the native evaluator's JSON errors cannot permanently interrupt a `/goal` task.
+**A:** Both run in parallel as separate stop hooks. When the native evaluator produces non-JSON text (common with third-party LLMs like DeepSeek), CC reports "Stop hook error: JSON validation failed". hello-goal v2.3.6 addresses this with a **StopFailure safety net**: a separate 6-line hook script that fires only when any Stop hook fails, unconditionally returning BLOCK to keep the task running. This ensures the native evaluator's JSON errors cannot permanently interrupt a `/goal` task.
+</details>
+
+<details>
+<summary><strong>Q: Does LLM semantic analysis work with DeepSeek V4?</strong></summary>
+
+**A:** Yes. v2.3.6 resolves DeepSeek V4 thinking mode compatibility — semantic analysis requests auto-inject `thinking: {type: "disabled"}` to get clean text output, avoiding the issue where thinking blocks consume all tokens with no text response. A thinking-block fallback extraction provides additional protection.
 </details>
 
 <details>

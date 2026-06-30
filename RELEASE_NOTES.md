@@ -1,5 +1,61 @@
 # Release Notes / 发布记录
 
+## v2.3.6 (2026-07-01)
+
+### 全类型 API 错误触发 + DeepSeek V4 兼容 —— 错误模式 10→85、thinking mode 适配、API 可达性缓存
+
+对比 v2.3.5 的实质性变更：
+
+**API 错误检测大幅扩展：**
+
+- `_API_ERROR_PATTERNS` 从 10 个扩展到 ~85 个，覆盖 9 大类别：连接/网络层（ECONNRESET、ETIMEDOUT、DNS 失败等）、HTTP 状态码（429/500/502/503/504/524 及通用 4xx/5xx）、限流/配额（含中文："请求过于频繁"、"并发上限"）、服务过载/不可用（含中文："服务繁忙"、"系统过载"）、认证/鉴权（401/403/API key 无效）、模型/引擎不存在、内部服务故障、DeepSeek V4 专属（reasoning_content 400、thinking mode 回传错误、Gateway 模型要求）、通用 API 故障。
+- `_detect_api_error` 新增"源 0"：API 不可用状态缓存。已知 API 不可用时跳过文本检测直接返回 BLOCK，避免重复扫描。
+- 所有模式命中即触发全局 BLOCK（无论是否 /goal 模式），不依赖 LLM 语义分析——API 本身不可用时语义分析同样不可用。
+
+**DeepSeek V4 thinking mode 兼容：**
+
+- `_llm_check` 自动检测 DeepSeek URL（`ANTHROPIC_BASE_URL` 含 "deepseek"）并注入 `thinking: {"type": "disabled"}`，直接获取 clean text 输出，避免 thinking 块消耗全部 token 导致无 text 响应。
+- 文本提取增加 thinking 块回退：无 text 块时从 thinking 块提取（兼容 max_tokens 不足时仅返回 thinking 的场景）。
+- `max_tokens` 从 10 提高到 100（基线保护，确保即使不禁用 thinking 也有足够余量）。
+
+**API 可达性状态缓存：**
+
+- 新增 `_is_api_available()` / `_mark_api_unavailable()`：LLM 语义分析调用失败后，记录 API 不可用时间戳到会话状态。后续 Stop hook 在 120 秒 TTL 内跳过 LLM 语义分析，直接返回 BLOCK，避免重复调用已死的 API。
+- `handle_stop` Phase 3 增加 API 可用性预检。
+
+**状态文件目录回退：**
+
+- `PLUGIN_DATA_DIR` 改为多级回退：`CLAUDE_PLUGIN_DATA` → `CLAUDE_PLUGIN_ROOT` → `TEMP` → 脚本目录。当 CC 未设置 `CLAUDE_PLUGIN_DATA` 时（如某些安装方式），状态仍能正常持久化。
+
+---
+
+### All-Type API Error Trigger + DeepSeek V4 Compatibility — 10→85 Patterns, Thinking Mode Fix, API Availability Cache
+
+Substantive changes compared to v2.3.5:
+
+**API error detection massively expanded:**
+
+- `_API_ERROR_PATTERNS` expanded from 10 to ~85 patterns, covering 9 categories: connection/network (ECONNRESET, ETIMEDOUT, DNS failures), HTTP status codes (429/500/502/503/504/524 + generic 4xx/5xx), rate-limit/quota (including Chinese messages), service overload/unavailable (including Chinese messages), authentication/authorization (401/403/invalid API key), model/engine not found, internal server errors, DeepSeek V4 specific (reasoning_content 400, thinking mode roundtrip errors, Gateway model requirements), generic API failures.
+- `_detect_api_error` adds "Source 0": API unavailability state cache. When API is known unavailable, skips text scanning and returns BLOCK directly.
+- All pattern matches trigger global BLOCK (regardless of /goal mode), independent of LLM semantic analysis — when the API is unavailable, semantic analysis is also unavailable.
+
+**DeepSeek V4 thinking mode compatibility:**
+
+- `_llm_check` auto-detects DeepSeek URLs (`ANTHROPIC_BASE_URL` contains "deepseek") and injects `thinking: {"type": "disabled"}`, obtaining clean text output directly, avoiding thinking blocks consuming all tokens with no text response.
+- Text extraction adds thinking block fallback: when no text block is present, extracts from thinking blocks (handles the case where max_tokens is insufficient and only thinking is returned).
+- `max_tokens` increased from 10 to 100 (baseline protection, even without thinking disabled).
+
+**API availability state caching:**
+
+- Added `_is_api_available()` / `_mark_api_unavailable()`: after LLM semantic analysis call fails, records API unavailability timestamp to session state. Subsequent Stop hooks within 120s TTL skip LLM semantic analysis and directly return BLOCK, avoiding repeated calls to a dead API.
+- `handle_stop` Phase 3 adds API availability pre-check.
+
+**State file directory fallback:**
+
+- `PLUGIN_DATA_DIR` uses multi-level fallback: `CLAUDE_PLUGIN_DATA` → `CLAUDE_PLUGIN_ROOT` → `TEMP` → script directory. When CC does not set `CLAUDE_PLUGIN_DATA` (certain installation methods), state can still persist normally.
+
+---
+
 ## v2.3.5 (2026-06-28)
 
 ### StopFailure 安全网兜底 —— 原生评估器 JSON 失败时自动接力 BLOCK

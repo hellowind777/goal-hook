@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""hello-goal v2.3.5 — Global API Recovery + Hybrid /goal Guardian.
+"""hello-goal v2.3.6 —— 全类型 API 错误触发 + Hybrid /goal Guardian.
+
+API 错误安全网（Phase 0）：任何第三方大模型错误（socket/HTTP/限流/过载/认证/
+模型不存在/内部故障）均触发 BLOCK 继续任务。不依赖 LLM 语义分析 ——
+API 本身不可用时语义分析同样不可用，因此必须由错误模式 + API 可达性联合兜底。
 
 硬编码 JSON 输出 —— 最终 stdout 输出永远是代码写死的合法 JSON，
 LLM 语义分析只影响内部决策分支，绝不直接或间接出现在 hook 的 stdout 上。
@@ -15,12 +19,17 @@ import time
 # 配置
 # ============================================================
 
-PLUGIN_DATA_DIR = os.environ.get("CLAUDE_PLUGIN_DATA", "")
-PLUGIN_NAME = "hello-goal"
-STATE_FILE = (
-    os.path.join(PLUGIN_DATA_DIR, ".goal_sessions.json")
-    if PLUGIN_DATA_DIR else ""
+PLUGIN_DATA_DIR = (
+    os.environ.get("CLAUDE_PLUGIN_DATA", "")
+    or os.environ.get("CLAUDE_PLUGIN_ROOT", "")
+    or os.environ.get("TEMP", "")
+    or os.environ.get("TMPDIR", "")
+    or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
 )
+PLUGIN_NAME = "hello-goal"
+STATE_FILE = os.path.join(PLUGIN_DATA_DIR, ".goal_sessions.json") if PLUGIN_DATA_DIR else ""
+# API 不可用状态缓存过期时间（秒）
+_API_UNAVAILABLE_TTL = 120
 
 ANTHROPIC_API_KEY = (
     os.environ.get("ANTHROPIC_API_KEY", "")
@@ -42,19 +51,126 @@ W_READONLY_STALL = 0.15  # 只读停滞（连续 Read 无 Write）
 
 PASS_THRESHOLD = 0.20    # < 此分数直接 PASS，≥ 此分数进入 LLM 语义分析
 
-# API 错误模式 —— 第三方大模型常见异常，/goal 模式下自动恢复继续
+# API 错误模式 —— 第三方大模型全类型故障。
+# 任何模式命中即触发全局 BLOCK（无论 /goal 状态），原因：API 不可用时
+# LLM 语义分析同样不可用，必须由错误模式 + API 可达性联合兜底。
 _API_ERROR_PATTERNS = [
+    # ======== 连接 / 网络层 (socket/TCP/DNS) ========
     r"socket connection was closed unexpectedly",
+    r"connection\s+(?:reset|refused|timed?\s*out|closed|error|aborted|dropped)",
+    r"network\s+(?:error|unreachable|issue|failure)",
+    r"tunnel\s+connection\s+failed",
+    r"proxy\s+error",
+    r"DNS\s+(?:resolution|lookup)\s+(?:failed|error)",
+    r"resolve\s+host\s+failed",
+    r"remote\s+end\s+closed",
+    r"\bECONNRESET\b",
+    r"\bECONNREFUSED\b",
+    r"\bETIMEDOUT\b",
+    r"\bENOTFOUND\b",
+    r"\bEAI_AGAIN\b",
+    r"\bEPIPE\b",
+    r"\bEHOSTUNREACH\b",
+    r"\bECONNABORTED\b",
+
+    # ======== HTTP 状态码 ========
     r"\b429\b",
     r"\b503\b",
     r"\b502\b",
     r"\b504\b",
+    r"\b500\b",
+    r"\b403\b",
+    r"\b401\b",
+    r"\b408\b",
+    r"\b524\b",
+    r"status\s*(?:code\s*)?[45]\d{2}",
+    r"HTTP\s*[45]\d{2}",
+
+    # ======== 限流 / 配额 ========
     r"rate\s*limit",
     r"too\s+many\s+requests",
+    r"quota\s*(?:exceeded|limit|reached|error)",
+    r"insufficient_quota",
+    r"billing\s*(?:issue|problem|limit|required|error)",
+    r"credit\b.*\b(?:balance|limit|insufficient|expired)",
+    r"usage\s*limit",
+    r"请求过于频繁",
+    r"频率限制",
+    r"并发\s*(?:上限|限制|超限)",
+
+    # ======== 服务过载 / 不可用 ========
     r"overloaded(?:_error)?",
-    r"connection\s+(?:reset|refused|timed\s*out|closed)",
-    r"fetch\s*failed",
-    r"network\s+error",
+    r"service\s+(?:unavailable|overloaded|busy|down|disrupted)",
+    r"server\s+(?:error|busy|overload|unavailable)",
+    r"temporarily\s+unavailable",
+    r"currently\s+unavailable",
+    r"high\s*(?:load|traffic|demand)",
+    r"under\s+(?:heavy|high)\s+load",
+    r"capacity\s*(?:issue|limit|exceeded)",
+    r"throttl",
+    r"be\s+back\s+(?:shortly|soon|later)",
+    r"服务(?:繁忙|不可用|异常|出错|故障|暂不可用)",
+    r"系统\s*(?:繁忙|过载|维护|不可用)",
+    r"maintenance\s+(?:mode|window|period|break)",
+    r"请\s*(?:稍后|稍候|晚些)\s*(?:重试|再试)",
+
+    # ======== 认证 / 鉴权 ========
+    r"api\s*(?:key|token)\s*(?:invalid|expired|missing|error|required|revoked)",
+    r"authentication\s*(?:error|failed|required)",
+    r"unauthorized",
+    r"not\s+authorized",
+    r"permission\s*(?:denied|error)",
+    r"auth\s*(?:error|failed|invalid)",
+    r"access\s*denied",
+
+    # ======== 模型 / 引擎不存在 ========
+    r"model\s*(?:not\s*found|unavailable|overloaded|busy|disabled)",
+    r"engine\s*(?:not\s*found|overloaded|unavailable)",
+    r"does\s+not\s+exist",
+    r"no\s+such\s+model",
+    r"invalid\s+model",
+
+    # ======== 内部服务故障 ========
+    r"internal\s+(?:server\s*)?error",
+    r"unexpected\s+(?:error|issue|problem|response)",
+    r"something\s+went\s+wrong",
+    r"server\s+encountered",
+    r"fatal\s+(?:error|exception)",
+    r"critical\s+(?:error|failure)",
+
+    # ======== DeepSeek V4 / 思考模式兼容性 (Claude Code 接入特有) ========
+    # DeepSeek V4 始终运行在 thinking mode，要求 reasoning_content 必须原样回传。
+    # Claude Code 在多轮工具调用时会剥离 thinking 块，导致下一轮 400。
+    r"reasoning_content.*must be passed back",
+    r"thinking.*must be passed back.*API",
+    r"thinking.*in the thinking mode",
+    r"tool result missing due to internal error",
+    r"gateway deployments require an Anthropic model",
+
+    # DeepSeek 官方错误码响应格式
+    r"invalid\s+format",
+    r"insufficient\s+balance",
+    r"error_code",
+
+    # ======== DeepSeek 中文特有错误 ========
+    r"服务器繁忙.*请稍后(?:重试|再试)?",
+    r"服务器内部错误",
+    r"余额不足",
+    r"账户.*(?:欠费|余额不足|已欠费)",
+    r"请充值",
+
+    # ======== 通用 API 故障 (上下文足够明确时才匹配) ========
+    r"sorry,\s*(?:something|an?\s+\w*\s*error)\s*(?:went|occurred|happened)",
+    r"unable\s+to\s+(?:process|complete|handle|respond|generate|connect|reach)",
+    r"cannot\s+(?:process|complete|fulfill|respond|connect)",
+    r"please\s+try\s+(?:again|later)",
+    r"try\s+again\s+(?:later|in\s+a\s+(?:few|moment|minute|second))",
+    r"encountered\s+an?\s+(?:error|issue|problem)",
+    r"failed\s+to\s+(?:connect|process|generate|respond|complete|fetch)",
+    r"error\s+(?:occurred|processing|generating|connecting)",
+    r"request\s+(?:rejected|denied|blocked|terminated|aborted)",
+    r"interrupted\s+(?:by|due\s+to)",
+    r"\bpanic\b",
 ]
 
 # ============================================================
@@ -527,20 +643,40 @@ def _llm_check(last_assistant_message, stop_reason, flags=None):
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         }
-        body = json.dumps({
+        req_body = {
             "model": LLM_MODEL,
-            "max_tokens": 10,
+            "max_tokens": 100,  # DeepSeek V4 thinking mode 先消耗 token 生成思考，需留足余量
             "messages": [{"role": "user", "content": prompt}],
-        }).encode("utf-8")
+        }
+        # DeepSeek V4 始终运行在 thinking mode，禁用以直接获取 text 输出
+        if "deepseek" in ANTHROPIC_BASE_URL.lower():
+            req_body["thinking"] = {"type": "disabled"}
+        body = json.dumps(req_body).encode("utf-8")
 
         req = _req.Request(url, data=body, headers=headers)
         with _req.urlopen(req, timeout=LLM_TIMEOUT) as resp:
             result = json.loads(resp.read().decode("utf-8"))
 
-        text = "".join(
-            b.get("text", "") for b in result.get("content", [])
-            if isinstance(b, dict) and b.get("type") == "text"
-        )
+        # 提取文本：优先 text 块，回退到 thinking 块（DeepSeek V4 兼容）
+        # DeepSeek V4 始终运行在 thinking mode，max_tokens 不足时
+        # 可能仅返回 thinking 块而无 text 块
+        content = result.get("content", [])
+        if not isinstance(content, list):
+            content = []
+
+        text_blocks = [
+            b.get("text", "") for b in content
+            if isinstance(b, dict) and b.get("type") == "text" and b.get("text")
+        ]
+        if text_blocks:
+            text = "".join(text_blocks)
+        else:
+            # 回退：无 text 块时从 thinking 块提取（DeepSeek V4 兼容）
+            text = "".join(
+                b.get("thinking", "") for b in content
+                if isinstance(b, dict) and b.get("type") == "thinking" and b.get("thinking")
+            )
+
         clean = text.upper().strip()
         if clean.startswith("BLOCK"):
             return True
@@ -567,9 +703,15 @@ def _match_api_error(text):
 
 
 def _detect_api_error(ctx):
-    """多源检测 API 错误：stop_reason → assistant 消息 → transcript 尾部。
+    """多源检测 API 错误：stop_reason → assistant 消息 → transcript 尾部 → 状态缓存。
     返回 (detected: bool, info: str)。
+    任何第三方大模型 API 故障均应被检出，不依赖 LLM 语义分析（API 不可用时语义分析同样不可用）。
     """
+    # 源 0: API 不可用状态缓存 —— 已知 API 不可用，无需重复检测文本
+    session_id = ctx.get("session_id", "")
+    if not _is_api_available(session_id):
+        return True, "API 不可用（状态缓存）"
+
     # 源 1: stop_reason 字段
     sr = ctx.get("stop_reason", "")
     pat = _match_api_error(sr)
@@ -613,6 +755,29 @@ def _detect_api_error(ctx):
     return False, ""
 
 
+def _is_api_available(session_id):
+    """检查 API 是否可用（基于近期状态缓存，避免重复调用已死的 API）。"""
+    if not session_id:
+        return True
+    state = _load_state()
+    ss = state.get(session_id, {})
+    last_fail = ss.get("api_unavailable_at", 0)
+    if last_fail and (time.time() - last_fail) < _API_UNAVAILABLE_TTL:
+        return False
+    return True
+
+
+def _mark_api_unavailable(session_id):
+    """记录 API 调用失败 —— 后续同一会话的 hook 调用将跳过 LLM 直接 BLOCK。"""
+    if not session_id:
+        return
+    state = _load_state()
+    ss = state.get(session_id, {})
+    ss["api_unavailable_at"] = time.time()
+    state[session_id] = ss
+    _save_state(state)
+
+
 # ============================================================
 # 事件处理
 # ============================================================
@@ -620,18 +785,21 @@ def _detect_api_error(ctx):
 def handle_stop(ctx):
     """Stop hook: 核心守护逻辑。
 
-    Phase 0 (全局): API 错误检测 —— 无论是否 /goal 模式，API 错误中断所有任务，
-                   必须自动恢复。socket 断开、429/502/503 等均为第三方大模型
-                   瞬时故障，不应让任务永久中断。
-    Phase 1 (/goal): 正常结束的 stop 才进入 /goal 专属守护（异常中断 + 行为信号
-                     + LLM 语义分析混合判定）。
+    Phase 0 (全局): 全类型 API 错误检测 —— 无论是否 /goal 模式。
+                   任何第三方大模型故障（socket/HTTP/限流/过载/认证/模型不存在/
+                   内部故障）均触发 BLOCK 继续任务。
+                   不依赖 LLM 语义分析 —— API 本身不可用时语义分析同样不可用，
+                   因此由错误模式匹配 + API 可达性状态联合兜底。
+    Phase 1 (/goal): 仅正常结束 + 无 API 错误的 stop 才进入（异常中断 +
+                     行为信号 + LLM 语义分析混合判定）。
     """
     session_id = ctx.get("session_id", "")
     transcript_path = ctx.get("transcript_path", "")
     stop_reason = ctx.get("stop_reason", "end_turn")
     last_msg = ctx.get("last_assistant_message", "")
 
-    # Phase 0 (全局): API 错误检测 —— 优先于 /goal 检查，全局响应
+    # Phase 0 (全局): 全类型 API 错误检测 —— 优先于 /goal 检查，全局响应
+    # 检测源: stop_reason / assistant 消息 / transcript 尾部 / API 不可用状态缓存
     api_error, api_info = _detect_api_error(ctx)
     if api_error:
         return _block("继续")
@@ -656,6 +824,10 @@ def handle_stop(ctx):
     if elapsed > HOOK_BUDGET_SEC:
         return _block("继续")
 
+    # API 可用性预检：已知 API 不可用则跳过 LLM 直接 BLOCK（避免重复调用已死 API）
+    if not _is_api_available(session_id):
+        return _block("继续")
+
     result = _llm_check(last_msg, stop_reason, flags)
 
     if result is True:
@@ -663,6 +835,9 @@ def handle_stop(ctx):
     elif result is False:
         return _pass()
     else:
+        # LLM 语义分析失败（API 不可用 / 网络异常 / 响应无法解析）
+        # 标记 API 不可用，后续 hook 将跳过 LLM 直接 BLOCK
+        _mark_api_unavailable(session_id)
         return _block("继续")
 
 
