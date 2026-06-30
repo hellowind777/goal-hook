@@ -1,20 +1,14 @@
 #!/usr/bin/env python3
-"""hello-goal v2.3.7 —— 全类型 API 错误触发（含 CC 直接报错） + Hybrid /goal Guardian.
+"""hello-goal v2.3.8 —— StopFailure API 错误恢复 + Hybrid /goal Guardian.
 
-API 错误安全网（Phase 0，全局，6 源检测）：
-  源0: API 可达性状态缓存（120s TTL）
-  源1: stop_reason 非正常值（CC 判定异常 → 直接 BLOCK）
-  源2: stop_reason 含错误模式（~85 种 / 9 大类）
-  源3: assistant 消息含错误模式
-  源4: assistant 消息为空（API 无响应，强信号）
-  源5: transcript 尾部深度扫描（50 条，所有字段，含 system/user）
+双通道 API 错误恢复:
+  StopFailure 事件 (CC-level 错误): socket断开/429/503/认证失败等 → _goal_failure.py 无条件 BLOCK
+  Stop 事件 Phase 0 (消息级错误): assistant 消息/transcript 中的 API 错误 → 5 源检测 → BLOCK
 
-不依赖 LLM 语义分析 —— API 本身不可用时语义分析同样不可用，
-因此由错误模式 + 异常信号 + 空消息 + 深度 transcript 联合兜底。
+/goal 守护: Phase 1-3 混合判定（异常中断恢复 + 行为信号 + LLM 语义分析）
 
 硬编码 JSON 输出 —— 最终 stdout 输出永远是代码写死的合法 JSON，
 LLM 语义分析只影响内部决策分支，绝不直接或间接出现在 hook 的 stdout 上。
-使用 print() 走 sys.stdout 通道，确保 CC 能 100% 捕获。
 """
 import json
 import os
@@ -870,9 +864,10 @@ def handle_stop(ctx):
     stop_reason = ctx.get("stop_reason", "end_turn")
     last_msg = ctx.get("last_assistant_message", "")
 
-    # Phase 0 (全局): 6 源全类型 API 错误检测 —— 优先于 /goal 检查，全局响应
+    # Phase 0 (全局): 5 源 API 错误检测 —— 优先于 /goal 检查，全局响应
     # 检测源: 可达性缓存 / stop_reason异常 / stop_reason含错误 /
-    #         assistant消息含错误 / 空assistant消息 / transcript深度扫描
+    #         assistant消息含错误 / transcript深度扫描
+    # 注: CC-level API 错误（socket断开等）由 StopFailure 事件独立处理
     api_error, api_info = _detect_api_error(ctx)
     if api_error:
         return _block("继续")
@@ -892,12 +887,10 @@ def handle_stop(ctx):
         return _pass()
 
     # score ≥ PASS_THRESHOLD → 存在行为信号，交 LLM 语义分析最终裁决
-    # 时间预算保护：剩余时间不足 15 秒则跳过 LLM，保守 BLOCK
     elapsed = time.time() - HOOK_START_TIME
     if elapsed > HOOK_BUDGET_SEC:
         return _block("继续")
 
-    # API 可用性预检：已知 API 不可用则跳过 LLM 直接 BLOCK（避免重复调用已死 API）
     if not _is_api_available(session_id):
         return _block("继续")
 
@@ -908,8 +901,6 @@ def handle_stop(ctx):
     elif result is False:
         return _pass()
     else:
-        # LLM 语义分析失败（API 不可用 / 网络异常 / 响应无法解析）
-        # 标记 API 不可用，后续 hook 将跳过 LLM 直接 BLOCK
         _mark_api_unavailable(session_id)
         return _block("继续")
 
