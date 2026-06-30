@@ -746,23 +746,28 @@ def _detect_api_error(ctx):
     if pat:
         return True, "assistant 消息匹配 " + pat
 
-    # 源 4: last_assistant_message 为空且 stop_reason 为 end_turn
-    # 这可能是 CC 直接显示 API 错误的场景，也可能是 CC 的正常空消息轮次。
-    # 为避免误判：不直接 BLOCK，而是触发增强 transcript 扫描（源 5 扩容到 100 条）。
-    # 如果源 5 找到错误证据 → BLOCK；否则 → PASS（非 API 错误）。
+    # 源 4: last_assistant_message 为空 + stop_reason = end_turn
+    # 可能是 CC 直接显示 API 错误，也可能是 CC 的空消息正常轮次。
+    # 不做直接 BLOCK —— 由源 5 transcript 扫描结果决定。
     _suspicious_empty_msg = bool(not last_msg and sr == "end_turn")
 
     # 源 5: transcript 尾部深度扫描
-    # 正常情况下扫描 50 条；空消息 + end_turn 疑似 CC 报错时扩容到 100 条
+    # 正常 50 条；空消息疑似时扩容到 100 条并收集佐证信号
     transcript_path = ctx.get("transcript_path", "")
     _scan_depth = 100 if _suspicious_empty_msg else 50
     entries = _read_transcript_tail(transcript_path, num_entries=_scan_depth)
+
+    # 空消息时收集 transcript 佐证
+    _assistant_text_turns = 0   # 最近有文本的 assistant 轮次
+    _system_error_entries = 0   # 含 error 类字段的 system 条目
+    _any_error_matched = False
+
     for entry in entries:
         etype = entry.get("type", "")
         msg = entry.get("message", {})
         content = msg.get("content", []) if isinstance(msg, dict) else []
 
-        # 收集 content 中所有文本（text / thinking / 任意 block）
+        # 提取 content 中所有文本（text / thinking）
         texts = []
         if isinstance(content, list):
             for block in content:
@@ -771,21 +776,33 @@ def _detect_api_error(ctx):
                     if t:
                         texts.append(t)
 
+        # 检查 content 文本是否命中错误模式
         pat = _match_api_error(" ".join(texts))
         if pat:
+            _any_error_matched = True
             return True, f"transcript {etype} 匹配 " + pat
 
-        # system entry: 检查所有字符串字段（不限于 error/reason/detail）
+        # 空消息时：统计最近的 assistant 文本轮次和 system 错误
+        if _suspicious_empty_msg:
+            if etype == "assistant" and texts:
+                _assistant_text_turns += 1
+
+        # system entry: 全面检查所有字符串字段
         if etype == "system":
-            for field in ("error", "reason", "detail", "message", "description",
-                          "subtype", "rawText"):
+            sys_fields = ("error", "reason", "detail", "message", "description",
+                          "subtype", "rawText")
+            for field in sys_fields:
                 val = entry.get(field, "")
                 if isinstance(val, str) and val:
                     pat = _match_api_error(val)
                     if pat:
                         return True, f"transcript system.{field} 匹配 " + pat
+                    if _suspicious_empty_msg and field in ("error", "reason"):
+                        # system 中有 error/reason 字段（即使不匹配 API 模式）也算佐证
+                        _system_error_entries += 1
+                        break
 
-        # user entry: CC 可能将 API 错误回显给用户
+        # user entry: CC 可能将 API 错误回显给用户的消息
         if etype == "user":
             for block in (content if isinstance(content, list) else []):
                 if isinstance(block, dict):
@@ -796,22 +813,15 @@ def _detect_api_error(ctx):
                             if pat:
                                 return True, f"transcript user 匹配 " + pat
 
-    # 源 4 (兜底): 空消息 + end_turn 且上述所有源均未检出错误
-    # 首次触发 → BLOCK（可能是 CC 直接报错，错误未进入 transcript）
-    # 60s 内重复触发且 transcript 始终干净 → PASS（大概率是 CC 正常空消息轮次）
+    # 源 4 (兜底): 空消息 + end_turn，transcript 未直接命中错误模式
+    # 需要佐证才 BLOCK（避免正常空消息轮次误触发）:
+    #   - assistant 文本轮次 = 0: 模型从未正常响应 → 极可能是 API 故障
+    #   - system error 条目 > 0: 有系统级错误 → API 故障
+    # 如果 transcript 中模型一直在正常响应（有文本）→ PASS
     if _suspicious_empty_msg:
-        state = _load_state()
-        ss = state.get(session_id, {})
-        last_empty_blk = ss.get("empty_msg_blocked_at", 0)
-        now_ts = time.time()
-        if last_empty_blk and (now_ts - last_empty_blk) < 60:
-            # 60s 内已因空消息 BLOCK 过一次，transcript 仍无错误 → 正常轮次
-            return False, ""
-        else:
-            ss["empty_msg_blocked_at"] = now_ts
-            state[session_id] = ss
-            _save_state(state)
-            return True, "空消息 + end_turn（CC 直接报错兜底，60s 内不再重复）"
+        if _assistant_text_turns == 0 or _system_error_entries > 0:
+            return True, "空消息 + 无assistant文本/有系统错误（API 故障佐证）"
+        return False, "空消息但 transcript 有正常响应（非 API 错误）"
 
     return False, ""
 
