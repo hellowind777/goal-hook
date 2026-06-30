@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
-"""hello-goal v2.3.6 —— 全类型 API 错误触发 + Hybrid /goal Guardian.
+"""hello-goal v2.3.7 —— 全类型 API 错误触发（含 CC 直接报错） + Hybrid /goal Guardian.
 
-API 错误安全网（Phase 0）：任何第三方大模型错误（socket/HTTP/限流/过载/认证/
-模型不存在/内部故障）均触发 BLOCK 继续任务。不依赖 LLM 语义分析 ——
-API 本身不可用时语义分析同样不可用，因此必须由错误模式 + API 可达性联合兜底。
+API 错误安全网（Phase 0，全局，6 源检测）：
+  源0: API 可达性状态缓存（120s TTL）
+  源1: stop_reason 非正常值（CC 判定异常 → 直接 BLOCK）
+  源2: stop_reason 含错误模式（~85 种 / 9 大类）
+  源3: assistant 消息含错误模式
+  源4: assistant 消息为空（API 无响应，强信号）
+  源5: transcript 尾部深度扫描（50 条，所有字段，含 system/user）
+
+不依赖 LLM 语义分析 —— API 本身不可用时语义分析同样不可用，
+因此由错误模式 + 异常信号 + 空消息 + 深度 transcript 联合兜底。
 
 硬编码 JSON 输出 —— 最终 stdout 输出永远是代码写死的合法 JSON，
 LLM 语义分析只影响内部决策分支，绝不直接或间接出现在 hook 的 stdout 上。
@@ -703,54 +710,93 @@ def _match_api_error(text):
 
 
 def _detect_api_error(ctx):
-    """多源检测 API 错误：stop_reason → assistant 消息 → transcript 尾部 → 状态缓存。
+    """多源检测 API 错误：stop_reason → 异常信号 → assistant 消息 → transcript 尾部 → 状态缓存。
     返回 (detected: bool, info: str)。
-    任何第三方大模型 API 故障均应被检出，不依赖 LLM 语义分析（API 不可用时语义分析同样不可用）。
+
+    检测层级 (按可靠性排序):
+      源 0: API 可达性状态缓存
+      源 1: stop_reason 自身非正常值 (CC 层面已判定异常)
+      源 2: stop_reason 含错误模式
+      源 3: last_assistant_message 含错误模式
+      源 4: last_assistant_message 为空 (API 无响应，强信号)
+      源 5: transcript 尾部深度扫描 (含 system/user 所有文本字段)
+
+    任何第三方大模型 API 故障均应被检出，不依赖 LLM 语义分析。
     """
     # 源 0: API 不可用状态缓存 —— 已知 API 不可用，无需重复检测文本
     session_id = ctx.get("session_id", "")
     if not _is_api_available(session_id):
         return True, "API 不可用（状态缓存）"
 
-    # 源 1: stop_reason 字段
     sr = ctx.get("stop_reason", "")
+    last_msg = ctx.get("last_assistant_message", "")
+
+    # 源 1: stop_reason 自身即异常信号 —— CC 在 API 出错时可能设为非标准值
+    # 正常 stop_reason 集合: end_turn / max_tokens / tool_use / stop_sequence
+    if sr and sr not in ("end_turn", "max_tokens", "tool_use", "stop_sequence"):
+        return True, "stop_reason 异常: " + sr
+
+    # 源 2: stop_reason 字段含错误模式
     pat = _match_api_error(sr)
     if pat:
         return True, "stop_reason 匹配 " + pat
 
-    # 源 2: last_assistant_message（LLM 可能直接报告了错误）
-    last_msg = ctx.get("last_assistant_message", "")
+    # 源 3: last_assistant_message 含错误模式
     pat = _match_api_error(last_msg)
     if pat:
         return True, "assistant 消息匹配 " + pat
 
-    # 源 3: transcript 尾部（系统错误 / assistant 文本 / user 回显）
+    # 源 4: last_assistant_message 为空且 stop_reason 为 end_turn
+    # 这是 CC 直接显示 API 错误的典型特征 —— 错误直接展示在 UI，不经过
+    # assistant 消息通道。end_turn + 空消息在正常对话中不会出现：
+    #   - 正常结束: assistant 总是有文本内容
+    #   - tool_use: stop_reason 设为 "tool_use"（源1不会拦截，源4以end_turn限定避开）
+    #   - max_tokens: 至少会返回部分文本再截断
+    # 非 end_turn 的异常 stop_reason 已在源1拦截，此处仅覆盖 sr=end_turn 的漏网场景
+    if not last_msg and sr == "end_turn":
+        return True, "assistant 消息为空 + end_turn（CC 直接报错）"
+
+    # 源 5: transcript 尾部深度扫描（50 条记录，含所有文本字段）
     transcript_path = ctx.get("transcript_path", "")
-    entries = _read_transcript_tail(transcript_path, num_entries=20)
+    entries = _read_transcript_tail(transcript_path, num_entries=50)
     for entry in entries:
         etype = entry.get("type", "")
         msg = entry.get("message", {})
         content = msg.get("content", []) if isinstance(msg, dict) else []
 
+        # 收集 content 中所有文本（text / thinking / 任意 block）
         texts = []
         if isinstance(content, list):
             for block in content:
-                t = block.get("text", "") if isinstance(block, dict) else str(block)
-                if t:
-                    texts.append(t)
+                if isinstance(block, dict):
+                    t = block.get("text", "") or block.get("thinking", "") or ""
+                    if t:
+                        texts.append(t)
 
         pat = _match_api_error(" ".join(texts))
         if pat:
             return True, f"transcript {etype} 匹配 " + pat
 
-        # 也检查 system entry 的 error / reason / detail 字段
+        # system entry: 检查所有字符串字段（不限于 error/reason/detail）
         if etype == "system":
-            for field in ("error", "reason", "detail"):
+            for field in ("error", "reason", "detail", "message", "description",
+                          "subtype", "rawText"):
                 val = entry.get(field, "")
-                if isinstance(val, str):
+                if isinstance(val, str) and val:
                     pat = _match_api_error(val)
                     if pat:
                         return True, f"transcript system.{field} 匹配 " + pat
+
+        # user entry: CC 可能将 API 错误回显给用户
+        if etype == "user":
+            for block in (content if isinstance(content, list) else []):
+                if isinstance(block, dict):
+                    for f in ("text", "error"):
+                        t = block.get(f, "")
+                        if isinstance(t, str) and t:
+                            pat = _match_api_error(t)
+                            if pat:
+                                return True, f"transcript user 匹配 " + pat
 
     return False, ""
 
@@ -785,11 +831,12 @@ def _mark_api_unavailable(session_id):
 def handle_stop(ctx):
     """Stop hook: 核心守护逻辑。
 
-    Phase 0 (全局): 全类型 API 错误检测 —— 无论是否 /goal 模式。
-                   任何第三方大模型故障（socket/HTTP/限流/过载/认证/模型不存在/
-                   内部故障）均触发 BLOCK 继续任务。
-                   不依赖 LLM 语义分析 —— API 本身不可用时语义分析同样不可用，
-                   因此由错误模式匹配 + API 可达性状态联合兜底。
+    Phase 0 (全局): 6 源全类型 API 错误检测 —— 无论是否 /goal 模式。
+                   源0: 可达性缓存 / 源1: stop_reason 异常 / 源2: stop_reason 含错误 /
+                   源3: assistant 消息含错误 / 源4: 空消息 / 源5: transcript 深度扫描。
+                   任何第三方大模型故障均触发 BLOCK 继续任务。
+                   不依赖 LLM 语义分析 —— CC 直接报错时(socket 断开等)stop_reason
+                   可能仍为 end_turn 但 assistant 消息为空，由源4+源5联合兜底。
     Phase 1 (/goal): 仅正常结束 + 无 API 错误的 stop 才进入（异常中断 +
                      行为信号 + LLM 语义分析混合判定）。
     """
@@ -798,8 +845,9 @@ def handle_stop(ctx):
     stop_reason = ctx.get("stop_reason", "end_turn")
     last_msg = ctx.get("last_assistant_message", "")
 
-    # Phase 0 (全局): 全类型 API 错误检测 —— 优先于 /goal 检查，全局响应
-    # 检测源: stop_reason / assistant 消息 / transcript 尾部 / API 不可用状态缓存
+    # Phase 0 (全局): 6 源全类型 API 错误检测 —— 优先于 /goal 检查，全局响应
+    # 检测源: 可达性缓存 / stop_reason异常 / stop_reason含错误 /
+    #         assistant消息含错误 / 空assistant消息 / transcript深度扫描
     api_error, api_info = _detect_api_error(ctx)
     if api_error:
         return _block("继续")

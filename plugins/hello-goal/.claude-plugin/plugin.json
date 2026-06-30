@@ -1,7 +1,7 @@
 {
   "name": "hello-goal",
-  "version": "2.3.6",
-  "description": "全类型 API 错误触发 + Hybrid /goal Guardian —— 任何第三方大模型故障（连接/HTTP/限流/过载/认证/模型不存在/内部错误）无论是否 /goal 模式均自动恢复继续，由错误模式 + API 可达性状态联合兜底，不依赖 LLM 语义分析；/goal 模式下叠加异常中断恢复 + 行为信号 + LLM 语义分析混合判定。语言无关，零外部依赖。",
+  "version": "2.3.7",
+  "description": "全类型 API 错误触发（含 CC 直接报错）+ Hybrid /goal Guardian —— 6 源检测（可达性缓存/stop_reason异常/错误模式匹配/空消息/transcript深度扫描），任何第三方大模型故障无论是否 /goal 模式均自动恢复继续，不依赖 LLM 语义分析；/goal 模式下叠加异常中断恢复 + 行为信号 + LLM 语义分析混合判定。语言无关，零外部依赖。",
   "author": {
     "name": "hellowind"
   },
