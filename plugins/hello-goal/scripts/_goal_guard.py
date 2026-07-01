@@ -736,86 +736,40 @@ def _detect_api_error(ctx):
         return True, "stop_reason 匹配 " + pat
 
     # 源 3: last_assistant_message 含错误模式
-    pat = _match_api_error(last_msg)
-    if pat:
-        return True, "assistant 消息匹配 " + pat
+    # 仅匹配极短消息（<100 字符）—— 真正的 API 错误响应很短（如 "Service overloaded"，
+    # "socket connection closed"，"429 Too Many Requests" 均 < 80 字符）。
+    # 超过 100 字符且提到错误码的文本是讨论而非实际 API 错误。
+    if last_msg and len(last_msg) < 100:
+        pat = _match_api_error(last_msg)
+        if pat:
+            return True, "assistant 消息匹配 " + pat
 
-    # 源 4: last_assistant_message 为空 + stop_reason = end_turn
-    # 可能是 CC 直接显示 API 错误，也可能是 CC 的空消息正常轮次。
-    # 不做直接 BLOCK —— 由源 5 transcript 扫描结果决定。
-    _suspicious_empty_msg = bool(not last_msg and sr == "end_turn")
-
-    # 源 5: transcript 尾部深度扫描
-    # 正常 50 条；空消息疑似时扩容到 100 条并收集佐证信号
+    # 源 4: transcript system 条目扫描
+    # 仅扫描 system 条目 —— assistant/user 消息可能包含关于 API 错误
+    # 的讨论内容（元讨论），而非实际 API 错误。
     transcript_path = ctx.get("transcript_path", "")
-    _scan_depth = 100 if _suspicious_empty_msg else 50
-    entries = _read_transcript_tail(transcript_path, num_entries=_scan_depth)
-
-    # 空消息时收集 transcript 佐证
-    _assistant_text_turns = 0   # 最近有文本的 assistant 轮次
-    _system_error_entries = 0   # 含 error 类字段的 system 条目
-    _any_error_matched = False
+    entries = _read_transcript_tail(transcript_path, num_entries=30)
 
     for entry in entries:
         etype = entry.get("type", "")
+
+        # 源 5 仅扫描 system 条目 —— assistant/user 消息可能包含
+        # 关于 API 错误的讨论内容（元讨论），而非实际 API 错误。
+        # 实际 API 错误只会出现在 system 条目的 error/reason 字段中。
+        if etype != "system":
+            continue
+
         msg = entry.get("message", {})
         content = msg.get("content", []) if isinstance(msg, dict) else []
 
-        # 提取 content 中所有文本（text / thinking）
-        texts = []
-        if isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict):
-                    t = block.get("text", "") or block.get("thinking", "") or ""
-                    if t:
-                        texts.append(t)
-
-        # 检查 content 文本是否命中错误模式
-        pat = _match_api_error(" ".join(texts))
-        if pat:
-            _any_error_matched = True
-            return True, f"transcript {etype} 匹配 " + pat
-
-        # 空消息时：统计最近的 assistant 文本轮次和 system 错误
-        if _suspicious_empty_msg:
-            if etype == "assistant" and texts:
-                _assistant_text_turns += 1
-
-        # system entry: 全面检查所有字符串字段
-        if etype == "system":
-            sys_fields = ("error", "reason", "detail", "message", "description",
-                          "subtype", "rawText")
-            for field in sys_fields:
-                val = entry.get(field, "")
-                if isinstance(val, str) and val:
-                    pat = _match_api_error(val)
-                    if pat:
-                        return True, f"transcript system.{field} 匹配 " + pat
-                    if _suspicious_empty_msg and field in ("error", "reason"):
-                        # system 中有 error/reason 字段（即使不匹配 API 模式）也算佐证
-                        _system_error_entries += 1
-                        break
-
-        # user entry: CC 可能将 API 错误回显给用户的消息
-        if etype == "user":
-            for block in (content if isinstance(content, list) else []):
-                if isinstance(block, dict):
-                    for f in ("text", "error"):
-                        t = block.get(f, "")
-                        if isinstance(t, str) and t:
-                            pat = _match_api_error(t)
-                            if pat:
-                                return True, f"transcript user 匹配 " + pat
-
-    # 源 4 (兜底): 空消息 + end_turn，transcript 未直接命中错误模式
-    # 需要佐证才 BLOCK（避免正常空消息轮次误触发）:
-    #   - assistant 文本轮次 = 0: 模型从未正常响应 → 极可能是 API 故障
-    #   - system error 条目 > 0: 有系统级错误 → API 故障
-    # 如果 transcript 中模型一直在正常响应（有文本）→ PASS
-    if _suspicious_empty_msg:
-        if _assistant_text_turns == 0 or _system_error_entries > 0:
-            return True, "空消息 + 无assistant文本/有系统错误（API 故障佐证）"
-        return False, "空消息但 transcript 有正常响应（非 API 错误）"
+        # 检查 system entry 的所有字符串字段
+        for field in ("error", "reason", "detail", "message", "description",
+                      "subtype", "rawText"):
+            val = entry.get(field, "")
+            if isinstance(val, str) and val:
+                pat = _match_api_error(val)
+                if pat:
+                    return True, f"transcript system.{field} 匹配 " + pat
 
     return False, ""
 
