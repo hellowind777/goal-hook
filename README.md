@@ -2,11 +2,11 @@
   <img src="./readme_images/01-hero-banner.svg" alt="hello-goal" width="800">
 </div>
 
-# hello-goal v2.3.6
+# hello-goal v2.3.10
 
-All-type API Error Recovery + Hybrid Guardian for Claude Code `/goal` tasks. Any third-party LLM failure (connection/HTTP/rate-limit/overload/auth/model-not-found/internal-error) auto-recovers regardless of `/goal` mode. DeepSeek V4 thinking mode compatible. All hook stdout JSON is hardcoded — LLM semantic analysis only affects internal decision branches, never touches stdout. Language-agnostic. Zero external dependencies. Pure Python standard library.
+exit 2 Native BLOCK Signal + Dual-Channel API Error Recovery + /goal Hybrid Guardian. BLOCK uses exit code 2 + stderr (bypasses JSON validation, unaffected by native /goal evaluator's JSON validation failed). StopFailure channel recovers CC-level API errors (socket/429/503) unconditionally. Stop Phase 0 covers message-level errors (~85 patterns / 5-source detection). DeepSeek V4 thinking mode compatible. Language-agnostic. Zero external dependencies. Pure Python standard library.
 
-[![Version](https://img.shields.io/badge/version-2.3.6-orange.svg)](./RELEASE_NOTES.md)
+[![Version](https://img.shields.io/badge/version-2.3.10-orange.svg)](./RELEASE_NOTES.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 [![LINUX DO](https://img.shields.io/badge/LINUX_DO-recognized-0A84FF?logo=linux&logoColor=white)](https://linux.do)
 
@@ -40,9 +40,12 @@ Claude Code's `/goal` has three typical failure modes in long-running tasks:
 2. **Abandonment** — the model wants to quit early due to fatigue, long context, or loss of confidence
 3. **Standard downgrade** — the model silently lowers completion criteria ("good enough", "mostly done")
 
-Additionally, **API errors** (socket disconnections from third-party LLM providers, HTTP 429/502/503/500/403, rate limiting, overload, auth failures, model not found, DeepSeek V4 thinking mode 400, etc.) can kill ANY task — `/goal` or not. hello-goal catches these globally, before any other check, and auto-recovers.
+Additionally, **API errors** (socket disconnect, HTTP 429/502/503/500, rate limiting, overload, auth failures, etc.) can kill ANY task — `/goal` or not. hello-goal covers these through a **dual-channel** approach:
 
-**hello-goal v2.3.6** uses a single command-type Stop hook with 4-phase cascaded analysis. API error detection covers **~85 patterns across 9 categories** (connection, HTTP status, rate-limit/quota, overload, auth, model/engine, internal errors, DeepSeek-specific, generic failures). LLM semantic analysis auto-adapts to DeepSeek V4 thinking mode (`thinking: disabled` for clean text output). API unavailability state cache (120s TTL) avoids repeated calls to a dead API.
+- **StopFailure event**: CC v2.1.78+ fires on API errors. `_goal_failure.py` uses `exit 2 + stderr` for unconditional BLOCK recovery.
+- **Stop Phase 0**: Message-level API errors (~85 patterns / 5-source detection). Only matches short messages (<100 chars) and system transcript entries, avoiding false triggers from meta-discussion.
+
+**hello-goal v2.3.10** BLOCK uses **exit code 2 + stderr** (CC's native block signal), bypassing JSON validation entirely. When running alongside CC's native /goal evaluator (which may output non-JSON with DeepSeek etc.), the native evaluator's `JSON validation failed` does not discard hello-goal's BLOCK. LLM semantic analysis auto-adapts DeepSeek V4 thinking mode. API unavailability state cache (120s TTL).
 
 ### Design Principle: Hardcoded JSON Output
 
@@ -92,7 +95,7 @@ Unlike CC's native `/goal` evaluator (which may output non-JSON text when using 
 
 ## The Problem It Solves
 
-| Scenario | Without hello-goal | With hello-goal v2.3.6 |
+| Scenario | Without hello-goal | With hello-goal v2.3.10 |
 |----------|-------------------|---------------------|
 | API error (~85 patterns/9 categories) in any session | Task permanently interrupted | Phase 0 detects → auto-recover BLOCK |
 | `/goal` hook error mid-task | Session terminates | Detects abnormal stop_reason → BLOCK |
@@ -135,9 +138,7 @@ Stop Hook fires
   └─ Global Exception Guard: unhandled internal error → BLOCK
 ```
 
-All BLOCK decisions return reason `"继续"` — minimal, non-distracting feedback to the AI assistant.
-
-All stdout output uses `print()` through `sys.stdout`. The LLM semantic analysis result only determines which branch is taken — the final JSON is always hardcoded in code.
+All BLOCK decisions use **exit code 2 + stderr** (CC's native block signal, bypassing JSON validation). PASS decisions use exit 0 + empty JSON `{}`. The LLM semantic analysis result only determines which branch is taken.
 
 ### Why not keywords/regex
 
@@ -220,24 +221,23 @@ Claude Code v2.1.143+ enforces a maximum of 8 consecutive Stop hook blocks. Rais
 
 ```
 hooks/hooks.json
-├── Stop (command, 30s)          ← Core guardian: 4-phase cascaded analysis
-├── StopFailure (command, 3s)    ← Safety net: native evaluator JSON failure → auto BLOCK
+├── Stop (command, 30s)          ← Core guardian: 4-phase analysis → exit 2
+├── StopFailure (command, 3s)    ← API error recovery: CC-level errors → exit 2
 ├── SessionStart (command, 5s)   ← Stale state cleanup, session init
 └── PostCompact (command, 3s)    ← Post-compaction detection cache refresh
 
-scripts/_goal_guard.py (~880 lines, zero dependencies)
+scripts/_goal_guard.py (~850 lines, zero dependencies)
 ├── handle_stop()           ← Phase 0-3 main logic
-├── handle_session_start()  ← State cleanup
-├── handle_post_compact()   ← Cache refresh with sticky goal_detected
+├── _detect_api_error()     ← 5-source API error detection (~85 patterns + state cache)
 ├── _detect_goal_active()   ← Three-tier /goal detection (markers + commands + summary)
 ├── _structural_score()     ← Behavioral signal weighting (4 signals)
-├── _detect_api_error()     ← API error multi-source detection (~85 patterns/9 cats + state cache)
-├── _llm_check()            ← LLM semantic analysis (urllib, DeepSeek V4 thinking=disabled)
+├── _llm_check()            ← LLM semantic analysis (DeepSeek V4 thinking=disabled)
 ├── _is_api_available()     ← API reachability check (120s cache)
-└── _mark_api_unavailable() ← API unavailability state marker
+├── _block()                ← exit 2 + stderr (CC native block signal)
+└── _pass()                 ← exit 0 + empty JSON {}
 
-scripts/_goal_failure.py (6 lines, zero dependencies)
-└── StopFailure handler     ← Unconditional BLOCK on any hook failure
+scripts/_goal_failure.py (18 lines, zero dependencies)
+└── StopFailure handler     ← exit 2 + stderr unconditional BLOCK
 ```
 
 ## Files
@@ -247,7 +247,7 @@ scripts/_goal_failure.py (6 lines, zero dependencies)
 | `plugins/hello-goal/hooks/hooks.json` | Four-hook registration (Stop + StopFailure + SessionStart + PostCompact) |
 | `plugins/hello-goal/scripts/_goal_guard.py` | Hybrid guardian main script (full analysis) |
 | `plugins/hello-goal/scripts/_goal_failure.py` | StopFailure safety net (6 lines, unconditional BLOCK) |
-| `plugins/hello-goal/.claude-plugin/plugin.json` | Plugin metadata (v2.3.6) |
+| `plugins/hello-goal/.claude-plugin/plugin.json` | Plugin metadata (v2.3.10) |
 | `.claude-plugin/marketplace.json` | Marketplace manifest |
 | `setup.py` | One-click cross-platform installer |
 
@@ -274,7 +274,13 @@ scripts/_goal_failure.py (6 lines, zero dependencies)
 <details>
 <summary><strong>Q: Does this conflict with CC's native /goal evaluator?</strong></summary>
 
-**A:** Both run in parallel as separate stop hooks. When the native evaluator produces non-JSON text (common with third-party LLMs like DeepSeek), CC reports "Stop hook error: JSON validation failed". hello-goal v2.3.6 addresses this with a **StopFailure safety net**: a separate 6-line hook script that fires only when any Stop hook fails, unconditionally returning BLOCK to keep the task running. This ensures the native evaluator's JSON errors cannot permanently interrupt a `/goal` task.
+**A:** Both run in parallel as separate stop hooks. When the native evaluator produces non-JSON text, CC reports "JSON validation failed". hello-goal v2.3.10 resolves this with **exit 2 + stderr**: BLOCK uses CC's native exit code 2 signal (bypassing JSON validation), so the native evaluator's JSON failure does not discard hello-goal's BLOCK. The StopFailure channel additionally handles CC-level API errors.
+</details>
+
+<details>
+<summary><strong>Q: Why exit 2 instead of JSON for BLOCK?</strong></summary>
+
+**A:** CC's native /goal evaluator (using third-party LLMs like DeepSeek) may output non-JSON text, causing the entire Stop hook batch to fail with `JSON validation failed`. hello-goal uses exit code 2 + stderr (CC's native "block" signal) which doesn't require JSON parsing, isolating it from the native evaluator's JSON failures.
 </details>
 
 <details>

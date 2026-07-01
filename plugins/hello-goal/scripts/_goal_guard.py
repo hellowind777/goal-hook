@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""hello-goal v2.3.9 —— exit 2 原生 BLOCK 信号 + StopFailure API 恢复 + /goal 守护。
+"""hello-goal v2.3.10 —— exit 2 原生 BLOCK 信号 + StopFailure API 恢复 + /goal 守护。
 
 BLOCK 使用 exit code 2 + stderr reason（CC 原生 block 信号，不参与 JSON 校验）。
 与 CC 原生 /goal 评估器并行时不受 "JSON validation failed" 影响。

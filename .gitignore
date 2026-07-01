@@ -1,2 +1,38 @@
+# Python
 __pycache__/
+*.py[cod]
+*.pyo
+
+# Plugin runtime state
 .goal_sessions.json
+*.debug.jsonl
+*_debug*.json
+hook_debug.jsonl
+
+# Test artifacts
+*_test_state*
+test-*.json
+
+# OS generated
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment & credentials
+.env
+.env.*
+*_token*
+*_secret*
+*credentials*
+
+# Local settings (contains user-specific paths)
+.claude/
+settings.local.json
+*.local.json

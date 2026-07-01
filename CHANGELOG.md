@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.10] - 2026-07-01
+
+### Changed
+- **BLOCK uses exit 2 + stderr** instead of JSON stdout — CC native block signal, bypasses JSON validation entirely.
+- Eliminates `JSON validation failed` conflict when running alongside CC's native /goal evaluator.
+- `_goal_failure.py` rewritten: reads stdin (`error_type`/`error_message`), exit 2 unconditional BLOCK.
+
+### Fixed
+- False positive BLOCK from meta-discussion about API errors (Source 3 <100 char filter, Source 5 system-only scan).
+- Native /goal evaluator JSON failure no longer discards hello-goal's valid BLOCK.
+
+## [2.3.9] - 2026-07-01
+
+### Changed
+- BLOCK switched to exit code 2 + stderr (CC native block signal, no JSON parsing needed).
+- `_goal_failure.py` synchronized to exit 2 + stderr.
+
+## [2.3.8] - 2026-07-01
+
+### Added
+- StopFailure API error recovery channel: `_goal_failure.py` reads CC's `error_type`/`error_message`, unconditional BLOCK.
+- Dual-channel architecture: StopFailure (CC-level errors) + Stop Phase 0 (message-level errors).
+
+### Fixed
+- False positive from Source 3 matching discussion texts about API errors (e.g., "check for 429 errors").
+
+## [2.3.7] - 2026-07-01
+
+### Added
+- 6-source API error detection in Phase 0.
+- Source 1: abnormal `stop_reason` values (not end_turn/max_tokens/tool_use/stop_sequence).
+- Source 4: empty `last_assistant_message` + end_turn as API error signal.
+- Source 5: transcript deep scan (50-100 entries, all system/user fields).
+
 ## [2.3.6] - 2026-07-01
 
 ### Added

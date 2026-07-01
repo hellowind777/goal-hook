@@ -1,5 +1,57 @@
 # Release Notes / 发布记录
 
+## v2.3.10 (2026-07-01)
+
+### exit 2 原生 BLOCK 信号 —— 消除与 CC 原生 /goal 评估器的 JSON 校验冲突
+
+对比 v2.3.5 的累积实质性变更：
+
+**exit 2 + stderr BLOCK 信号：**
+
+- _block() 改用 sys.exit(2) + stderr，不再输出 JSON 到 stdout。exit 2 是 CC 原生 block 信号，不参与 JSON 校验。
+- _goal_failure.py 同步改用 exit 2 + stderr。
+- _pass() 保持 exit 0 + 空 JSON {}。
+- 解决：CC 原生 /goal 评估器输出非 JSON 时，hello-goal 的 BLOCK 不再被连带丢弃。
+
+**StopFailure API 错误恢复通道：**
+
+- _goal_failure.py 重写：读取 stdin（error_type/error_message），exit 2 无条件 BLOCK。
+- 双通道：StopFailure 处理 CC-level 错误，Stop Phase 0 处理消息级错误。
+
+**API 错误检测：~10 → ~85 模式（9 大类），5 源检测。**
+**Source 3 长度限制（<100 字符）：避免元讨论误触发。**
+**Source 5 仅扫描 system 条目。**
+**DeepSeek V4 thinking mode 兼容（thinking=disabled + 回退提取）。**
+**API 可达性状态缓存（120s TTL）。**
+**状态文件多级目录回退。**
+
+---
+
+### exit 2 Native BLOCK Signal — Eliminates JSON Validation Conflict with CC Native /goal Evaluator
+
+Cumulative substantive changes vs v2.3.5:
+
+**exit 2 + stderr BLOCK signal:**
+
+- _block() uses sys.exit(2) + stderr, no JSON stdout. exit 2 is CC native block signal, bypasses JSON validation.
+- _goal_failure.py synchronized.
+- _pass() keeps exit 0 + {}.
+- Fixes: native evaluator JSON failure no longer discards hello-goal BLOCK.
+
+**StopFailure API error recovery channel:**
+- _goal_failure.py rewritten: reads stdin, exit 2 unconditional BLOCK.
+- Dual-channel: StopFailure (CC-level) + Stop Phase 0 (message-level).
+
+**API error detection: ~10 → ~85 patterns (9 categories), 5-source detection.**
+**Source 3 length filter (<100 chars) prevents meta-discussion false triggers.**
+**Source 5 system-entry-only scan.**
+**DeepSeek V4 thinking mode compat (thinking=disabled + fallback).**
+**API availability state cache (120s TTL).**
+**State file multi-level fallback.**
+
+---
+
+
 ## v2.3.6 (2026-07-01)
 
 ### 全类型 API 错误触发 + DeepSeek V4 兼容 —— 错误模式 10→85、thinking mode 适配、API 可达性缓存
